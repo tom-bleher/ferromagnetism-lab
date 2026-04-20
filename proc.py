@@ -268,16 +268,12 @@ def _(
     DATA_XLSX,
     H_per_Vx,
     MU0_THEO,
-    fmt,
-    mo,
-    np,
     read_table,
     u_V,
     unp,
 ):
     pt1 = read_table(DATA_XLSX, sheet_name='virgin-curve', usecols=[0, 1])
     pt1.columns = ['dVx', 'dVy']
-    pt1.insert(0, 'trans', 10 * (np.arange(len(pt1)) + 1))
 
     Vx_u = unp.uarray(pt1['dVx'].to_numpy(), u_V(pt1['dVx'].to_numpy()))
     Vy_u = unp.uarray(pt1['dVy'].to_numpy(), u_V(pt1['dVy'].to_numpy()))
@@ -292,24 +288,6 @@ def _(
     pt1['sB']       = unp.std_devs(B_u)
     pt1['mu_rel']   = unp.nominal_values(mu_rel_u)
     pt1['s_mu_rel'] = unp.std_devs(mu_rel_u)
-
-    _rows = [
-        '| ' + ' | '.join([
-            rf'${trans:g}\,\mathrm{{V}}$',
-            fmt(vx, 'V'),
-            fmt(vy, 'V'),
-            fmt(h,  r'A\,m^{-1}'),
-            fmt(b,  'T'),
-            fmt(mr),
-        ]) + ' |'
-        for trans, vx, vy, h, b, mr
-        in zip(pt1['trans'], Vx_u, Vy_u, H_u, B_u, mu_rel_u)
-    ]
-    mo.center(mo.md('\n'.join([
-        r'| transformer | $\Delta V_x$ | $\Delta V_y$ | $H$ | $B$ | $\mu_r$ |',
-        '|---|---|---|---|---|---|',
-        *_rows,
-    ])))
     return (pt1,)
 
 
