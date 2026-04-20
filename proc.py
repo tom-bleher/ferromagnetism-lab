@@ -509,7 +509,7 @@ def _(FIG_DIR, RUNS, fits, np, plt):
         _draw(_sheet, _f)
 
     ax_fit.set_ylabel(r'$N I / B$   (A·m / T)')
-    ax_fit.set_title(r"Vacuum permeability from the air-gap method: $N I / B$ vs $L'$")
+    ax_fit.set_title(r"Vacuum permeability: $N I / B$ vs number of copper plates")
     ax_fit.legend(loc='upper left')
     ax_fit.minorticks_on()
     ax_fit.grid(True, which='minor', alpha=0.10)
