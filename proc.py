@@ -509,10 +509,7 @@ def _(FIG_DIR, RUNS, fits, np, plt):
         _draw(_sheet, _f)
 
     ax_fit.set_ylabel(r'$N I / B$   (A·m / T)')
-    ax_fit.set_title(
-        r"Air-gap linear fit:   $NI/B = L'/\mu_0 + L/\mu_\mathrm{iron}$"
-        r"   (ODR on $V_x/V_y$; apparatus uncertainty propagated into $\mu_0$)"
-    )
+    ax_fit.set_title(r"Vacuum permeability from the air-gap method: $N I / B$ vs $L'$")
     ax_fit.legend(loc='upper left')
     ax_fit.minorticks_on()
     ax_fit.grid(True, which='minor', alpha=0.10)
