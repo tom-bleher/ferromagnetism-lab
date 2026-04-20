@@ -1,0 +1,8 @@
+marimo
+numpy
+pandas
+matplotlib
+scipy
+uncertainties
+openpyxl
+taulab

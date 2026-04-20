@@ -27,5 +27,6 @@ $$\mu_0 = \frac{1}{K \cdot \text{slope}}$$
 ## Run
 
 ```sh
+pip3 install -r requirements.txt
 marimo run proc.py
 ```
