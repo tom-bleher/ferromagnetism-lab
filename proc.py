@@ -235,14 +235,6 @@ def _(
     | $A$ | {fmt(A, 'm^{{2}}')} |
     | $\\mu_0^{{\\mathrm{{CODATA}}}}$ | ${MU0_THEO:.4e}\\,\\mathrm{{T\\,m\\,A^{{-1}}}}$ |
 
-    **Calibration coefficients**
-
-    Following the relations mentioned above we get
-
-    $$H = ({H_per_Vx:.2uL})\\,\\Delta V_x \\;\\;[\\mathrm{{A\\,m^{{-1}}\\,V^{{-1}}}}]$$
-
-    $$B = ({B_per_Vy:.2uL})\\,\\Delta V_y \\;\\;[\\mathrm{{T\\,V^{{-1}}}}]$$
-
     **Integrator check**
 
     The $R_y$–$C$ circuit behaves as an integrator
