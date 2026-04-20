@@ -517,6 +517,7 @@ def _(FIG_DIR, RUNS, fits, np, plt):
     ax_res.axhline(0, color='gray', linestyle='--', linewidth=0.8)
     ax_res.set_xlabel(r"$L'$   (mm)")
     ax_res.set_ylabel('residual  (A·m / T)')
+    ax_res.set_xticks([1, 2, 3, 4, 5])
     ax_res.minorticks_on()
     ax_res.grid(True, which='minor', alpha=0.10)
 
