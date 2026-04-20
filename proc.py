@@ -142,8 +142,6 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     _budget_md = r"""
-    ## Uncertainties
-
     | Quantity | Value | Uncertainty (rel) | Comment/Origin |
     |---|---|---|---|
     | $N$ (turns) | $250$ | — | count given |
@@ -154,9 +152,8 @@ def _(mo):
     | $C$ (integrator) | $20.1\,\mu\mathrm{F}$ | $2.0\,\mathrm{nF}$ $(0.01\%)$ | value and uncertainty given |
     | $A$ (core cross-section) | $16.0\,\mathrm{cm^{2}}$ | $A\,\sqrt{2}\,\dfrac{1\,\mathrm{mm}/\sqrt{12}}{40\,\mathrm{mm}} \approx 0.16\,\mathrm{cm^{2}}$ $(1.02\%)$ | two ruler measurements for sides $a,b\approx 4\,\mathrm{cm}$ (res $1\,\mathrm{mm}$) and indirect $A=a\cdot b$: $\sigma_A/A = \sqrt{(\sigma_a/a)^2 + (\sigma_b/b)^2}$ |
     | $\Delta V_x,\,\Delta V_y$ (scope, dual-cursor) | per measurement | $\sqrt{(0.024\,\lvert V\rvert)^2 + (5\,\mathrm{mV})^2 + (\mathrm{LSD}/\sqrt{12})^2}$ | device (Keysight DSO7012A using dual-cursor spec) and resolution |
-
     """
-    mo.center(mo.md(_budget_md))
+    mo.vstack([mo.md("## Uncertainties"), mo.center(mo.md(_budget_md))])
     return
 
 
