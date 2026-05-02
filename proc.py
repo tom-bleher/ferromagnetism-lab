@@ -96,7 +96,8 @@ def _():
 
     _here = Path(__file__).resolve().parent
     DATA_XLSX = _here / 'data' / 'data.xlsx'
-    FIG_DIR    = _here.parent / 'report' / 'figures'
+    FIG_DIR    = _here.parent / 'report' / 'media'
+    FIG_DIR.mkdir(parents=True, exist_ok=True)
     # CODATA-2022 μ₀ (post-2019 SI); uncertainty ~10⁻¹⁶ is negligible
     # vs. our ~10⁻⁸ measurement σ, but is carried for nσ reporting.
     MU0_THEO   = 1.25663706127e-6
@@ -455,8 +456,8 @@ def _(
     _rows = [
         (r'$\langle B\rangle$',                  lambda f: rf'${f["B_mean"]:.2f}\,\mathrm{{T}}$'),
         (r'$H_{\mathrm{max}}$',                  lambda f: rf'${f["H_max"]:.0f}\,\mathrm{{A\,m^{{-1}}}}$'),
-        (r'slope $= 1/\mu_0$',                   lambda f: fmt(f['slope'],     r'm^{-1}')),
-        (r'intercept $= L/\mu_{\mathrm{iron}}$', lambda f: fmt(f['intercept'], r'A\,m\,T^{-1}')),
+        (r'slope $= 1/\mu_0$',                   lambda f: fmt(f['slope'],     r'A\,T^{-1}\,m^{-1}')),
+        (r'intercept $= L/\mu_{\mathrm{iron}}$', lambda f: fmt(f['intercept'], r'A\,T^{-1}')),
         (r'$\mu_0^{\mathrm{exp}}$',              lambda f: fmt(f['mu0_exp'],   r'T\,m\,A^{-1}')),
         (r'$n_\sigma$ vs CODATA',                lambda f: rf'${nsigma(f["mu0_exp"], MU0_THEO_U):.1f}$'),
         (r'$\mu_{\mathrm{iron}}/\mu_0$',         lambda f: fmt(f['mu_iron'] / MU0_THEO)),

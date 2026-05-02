@@ -34,6 +34,12 @@ $N_\text{primary}=N_\text{secondary}$.
 
 ## $\mu_0$ extraction — `vacuum-permeability`
 
+The final copper-gap widths used by `proc.py` are the measured `L' (mm)` rows
+in `data.xlsx`: run `a` uses $0.35, 0.20, 0.10, 0.00~\mathrm{mm}$ and run
+`b` uses $0.50, 0.45, 0.35, 0.20, 0.10, 0.00~\mathrm{mm}$. These workbook
+values are authoritative for the analysis; a rough sketch-note value of
+$1.3~\mathrm{mm}$ was not used.
+
 Per row,
 
 $$I = \frac{\Delta V_x}{2R_x}, \qquad B = \frac{\Delta V_y \, R_y \, C}{2 N \, A}.$$
@@ -63,3 +69,15 @@ advantages: (a) the peak-to-peak factor of 2 cancels in the ratio, so the
 extracted $\mu_0$ is invariant under the cursor convention; (b) folding $K$
 in *after* the fit prevents the fully-correlated apparatus uncertainty from
 being diluted as $\sqrt{N}$ independent samples by ODR.
+
+## Current-limit convention
+
+The external AC ammeter was used only for safety monitoring against the guide's
+current limit, not for data processing. The processing uses oscilloscope
+peak-to-peak voltages, so the current amplitude inferred from the scope is
+
+$$I_\text{peak}=\frac{\Delta V_x}{2R_x}.$$
+
+Any spreadsheet `I (A)` columns are legacy derived checks and should not be
+used as authoritative processed data; in particular, they do not define the
+safety-ammeter convention.
