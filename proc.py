@@ -25,7 +25,7 @@ def _(mo):
 
     $$H = \frac{N}{2\,L\,R_x}\,\Delta V_x, \qquad B = \frac{R_y\,C}{2\,N\,A}\,\Delta V_y.$$
 
-    Cubic-spline fits give smooth $B(H)$ and $\mu_r(H)=\frac{B}{\mu_0}H$.
+    Cubic-spline fits give smooth $B(H)$ and $\mu_r(H)=\frac{B}{\mu_0 H}$.
 
     ### **Part B — Vacuum permeability $\mu_0$**
 
@@ -58,7 +58,6 @@ def _():
         nsigma,
         odr_fit,
         read_table,
-        weighted_mean,
     )
 
     from instruments import (
@@ -73,7 +72,7 @@ def _():
     plt.rcParams.update({
         'figure.figsize':    (8.0, 4.8),
         'figure.dpi':        110,
-        'savefig.dpi':       300,
+        'savefig.dpi':       600,
         'font.size':         11,
         'font.family':       'DejaVu Sans',
         'mathtext.fontset':  'cm',
@@ -97,7 +96,7 @@ def _():
 
     _here = Path(__file__).resolve().parent
     DATA_XLSX = _here / 'data' / 'data.xlsx'
-    FIG_DIR    = _here.parent / 'drafts' / 'media'
+    FIG_DIR    = _here.parent / 'report' / 'figures'
     # CODATA-2022 μ₀ (post-2019 SI); uncertainty ~10⁻¹⁶ is negligible
     # vs. our ~10⁻⁸ measurement σ, but is carried for nσ reporting.
     MU0_THEO   = 1.25663706127e-6
@@ -135,7 +134,6 @@ def _():
         ruler,
         ufloat,
         unp,
-        weighted_mean,
     )
 
 
@@ -336,6 +334,7 @@ def _(CubicSpline, FIG_DIR, np, plt, pt1):
     axB.legend(h1 + h2, l1 + l2, loc='center right', framealpha=0.92)
 
     fig.savefig(FIG_DIR / 'fig_BH_mu.pdf', bbox_inches='tight')
+    fig.savefig(FIG_DIR / 'fig_BH_mu.png', bbox_inches='tight', dpi=600)
     fig
     return
 
@@ -520,7 +519,8 @@ def _(FIG_DIR, RUNS, fits, np, plt):
     ax_res.minorticks_on()
     ax_res.grid(True, which='minor', alpha=0.10)
 
-    fig2.savefig(FIG_DIR / 'fig_air_gap.pdf', bbox_inches='tight')
+    fig2.savefig(FIG_DIR / 'fig_copper_gap.pdf', bbox_inches='tight')
+    fig2.savefig(FIG_DIR / 'fig_copper_gap.png', bbox_inches='tight', dpi=600)
     fig2
     return
 
