@@ -2,13 +2,16 @@
 
 ## Layout
 
-- `proc.py` — marimo notebook (run with `marimo run proc.py` or `marimo edit proc.py`).
+- `proc.py` — marimo notebook (run with `uv run marimo run proc.py` or `uv run marimo edit proc.py`).
   - **Part A** — virgin magnetization curve $B(H)$ and $\mu_r(H)$ from
     dual-cursor scope readings, cubic-spline interpolated.
-  - **Part B** — fit of $NI/B$ vs air-gap $L'$ to extract $\mu_0$ from the
+  - **Part B** — fit of $NI/B$ vs copper-gap $L'$ to extract $\mu_0$ from the
     inverse slope and $\mu_\text{iron}$ from the intercept.
 - `instruments.py` — uncertainty models for the bench instruments used
   (HP 34401A DMM, Agilent DSO7012A scope).
+
+Generated figures are written directly to `../report/figures/`, so rerunning
+the notebook updates the files used by the LaTeX report.
 
 ## Fit method
 
@@ -27,6 +30,6 @@ $$\mu_0 = \frac{1}{K \cdot \text{slope}}$$
 ## Run
 
 ```sh
-pip3 install -r requirements.txt
-marimo run proc.py
+uv sync
+uv run marimo run proc.py
 ```
