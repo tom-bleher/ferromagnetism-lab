@@ -14,7 +14,7 @@ Raw measurements from the $B$–$H$ curve and vacuum-permeability experiment.
 | $A$   | $0.0016~\text{m}^2$                    | ring cross-section area |
 | $\mu_0$ | $1.25663706127\times 10^{-6}~\text{T·m/A}$ | vacuum permeability (CODATA) |
 
-## Derived quantities — `virgin-curve`
+## Derived quantities — initial magnetization curve (`virgin-curve`)
 
 `proc.py` treats the voltage columns as authoritative and recalculates the
 derived fields; any precomputed spreadsheet columns are only a legacy check.

@@ -3,7 +3,7 @@
 ## Layout
 
 - `proc.py` — marimo notebook (run with `uv run marimo run proc.py` or `uv run marimo edit proc.py`).
-  - **Part A** — virgin magnetization curve $B(H)$ and $\mu_r(H)$ from
+  - **Part A** — initial magnetization curve $B(H)$ and $\mu_r(H)$ from
     dual-cursor scope readings, cubic-spline interpolated.
   - **Part B** — fit of $NI/B$ vs copper-gap $L'$ to extract $\mu_0$ from the
     inverse slope and $\mu_\text{iron}$ from the intercept.

@@ -146,11 +146,11 @@ def _(mo):
     | $N$ (turns) | $250$ | — | count given |
     | $L$ (Ampère loop) | $0.48\,\mathrm{m}$ | $\frac{2\sqrt{2}\,\mathrm{mm}}{\sqrt{12}} \approx 0.82\,\mathrm{mm}$ $(0.17\%)$ | two ruler measurements for sides $a,b$ (res $1\,\mathrm{mm}$) and indirect $L = 2(a+b)$: $\sigma_L = 2\sqrt{\sigma_a^2 + \sigma_b^2}$ |
     | $L'$ | per measurement | $\frac{0.05\,\mathrm{mm}}{\sqrt{12}} \approx 14.4\,\mu\mathrm{m}$ | caliper (res $0.05\,\mathrm{mm}$) |
-    | $R_x$ (current-sense) | $2.999\,\mathrm{\Omega}$ | $4.3\,\mathrm{m\Omega}$ $(0.14\%)$ | device (Keysight 34401A, 100 Ω range) and resolution $\frac{\text{LSD}}{\sqrt{12}}$ |
-    | $R_y$ (integrator) | $11.10\,\mathrm{k\Omega}$ | $2.1\,\mathrm{\Omega}$ $(0.019\%)$ | device (Keysight 34401A, 100 kΩ range) and resolution $\frac{\text{LSD}}{\sqrt{12}}$ |
+    | $R_x$ (current-sense) | $2.999\,\mathrm{\Omega}$ | $4.3\,\mathrm{m\Omega}$ $(0.14\%)$ | HP 34401A manual, p. 216: 1-year resistance accuracy on 100 Ω range, $0.010\%$ reading + $0.004\%$ range, plus $\mathrm{LSD}/\sqrt{12}$ |
+    | $R_y$ (integrator) | $11.10\,\mathrm{k\Omega}$ | $2.1\,\mathrm{\Omega}$ $(0.019\%)$ | HP 34401A manual, p. 216: 1-year resistance accuracy on 100 kΩ range, $0.010\%$ reading + $0.001\%$ range |
     | $C$ (integrator) | $20.1\,\mu\mathrm{F}$ | $2.0\,\mathrm{nF}$ $(0.01\%)$ | value and uncertainty given |
     | $A$ (core cross-section) | $16.0\,\mathrm{cm^{2}}$ | $A\,\sqrt{2}\,\dfrac{1\,\mathrm{mm}/\sqrt{12}}{40\,\mathrm{mm}} \approx 0.16\,\mathrm{cm^{2}}$ $(1.02\%)$ | two ruler measurements for sides $a,b\approx 4\,\mathrm{cm}$ (res $1\,\mathrm{mm}$) and indirect $A=a\cdot b$: $\sigma_A/A = \sqrt{(\sigma_a/a)^2 + (\sigma_b/b)^2}$ |
-    | $\Delta V_x,\,\Delta V_y$ (scope, dual-cursor) | per measurement | $\sqrt{(0.024\,\lvert V\rvert)^2 + (5\,\mathrm{mV})^2 + (\mathrm{LSD}/\sqrt{12})^2}$ | device (Keysight DSO7012A using dual-cursor spec) and resolution |
+    | $\Delta V_x,\,\Delta V_y$ (scope, dual-cursor) | per measurement | $\sqrt{(0.024\,\lvert V\rvert)^2 + (5\,\mathrm{mV})^2 + (\mathrm{LSD}/\sqrt{12})^2}$ | Agilent 7000A data sheet, p. 18: dual-cursor accuracy $=2.0\%$ vertical gain + $0.4\%$ full scale; full scale approximated by the measured cursor span |
     """
     mo.vstack([mo.md("## Uncertainties"), mo.center(mo.md(_budget_md))])
     return
@@ -217,6 +217,10 @@ def _(
     T_drive = 1.0 / f_drive
     tau_RC  = Ry * C
     wRyC    = omega * tau_RC
+    _wRyC_nom = wRyC.n
+    _integrator_gain_ratio = _wRyC_nom / np.sqrt(1 + _wRyC_nom**2)
+    _integrator_gain_error_pct = (1 - _integrator_gain_ratio) * 100
+    _integrator_phase_deg = np.degrees(np.arctan(1 / _wRyC_nom))
 
     mo.md(f"""
     **Apparatus constants**
@@ -233,11 +237,17 @@ def _(
 
     **Integrator check**
 
-    The $R_y$–$C$ circuit behaves as an integrator
-    when the time constant $\\tau = R_y C$ is much longer than the drive
-    period, equivalently $\\omega R_y C \\gg 1$:
+    The $R_y$–$C$ circuit is a valid integrator at the 50 Hz drive
+    frequency. Its exact transfer function is
+    $G_{{RC}}(\\omega)=1/(1+i\\omega R_yC)$, which reduces to the ideal
+    integrator $1/(i\\omega R_yC)$ when $\\omega R_yC\\gg1$:
 
     $$\\tau = R_y C = ({tau_RC*1e3:.2uL})\\,\\mathrm{{ms}} \\;\\gg\\; T = 1/f = {T_drive*1e3:.1f}\\,\\mathrm{{ms}}, \\qquad \\omega\\tau = {wRyC:.2uL}.$$
+
+    Quantitatively,
+    $\\left|G_{{RC}}/(1/i\\omega R_yC)\\right|={_integrator_gain_ratio:.5f}$,
+    so the non-ideal amplitude correction is only {_integrator_gain_error_pct:.3f}%
+    and the phase departure from an ideal integrator is {_integrator_phase_deg:.2f}°.
     """)
     return A, B_per_Vy, C, H_per_Vx, L, N, Rx, Ry, u_Lp, u_V
 
@@ -245,7 +255,7 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Part A — Virgin curve $B(H)$ and $\mu_r(H)$
+    ## Part A — Initial magnetization curve $B(H)$ and $\mu_r(H)$
     """)
     return
 
@@ -281,7 +291,7 @@ def _(
 
 @app.cell
 def _(CubicSpline, FIG_DIR, np, plt, pt1):
-    # B(H) anchored at the origin (virgin curve starts at (0, 0));
+    # B(H) anchored at the origin (initial magnetization starts at (0, 0));
     # μ_r(H) not anchored — μ_r(0) is a finite initial permeability we
     # do not measure directly.
     H_nodes = np.concatenate([[0.0], pt1['H'].to_numpy()])
@@ -328,7 +338,7 @@ def _(CubicSpline, FIG_DIR, np, plt, pt1):
     axMu.spines['right'].set_color(C_MU)
     axMu.grid(False)
 
-    axB.set_title('Virgin magnetization curve and relative permeability — iron toroid')
+    axB.set_title('Initial magnetization curve and relative permeability — iron toroid')
 
     h1, l1 = axB.get_legend_handles_labels()
     h2, l2 = axMu.get_legend_handles_labels()
