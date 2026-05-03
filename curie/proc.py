@@ -1080,14 +1080,20 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, pd, summary):
 @app.cell(hide_code=True)
 def _(FIT_UPPER_MARGIN_K, K_MIN, K_best, K_scan_table, Tc_C, Tc_K, fit_mask, mo, odr_result, rescale, sigma_Tc_K, summary):
     # Render the K-scan table as markdown, highlighting the chosen K* row.
+    # Truncate to a focused window around K* so the optimum is visible
+    # without scrolling through dozens of K values whose p-value has
+    # already collapsed.
     if not K_scan_table.empty:
+        _K_max_disp = K_best + 6
+        _disp = K_scan_table[K_scan_table["K"] <= _K_max_disp]
         _hdr = "| K | Tc (K) | chi^2/nu | p-value |"
         _sep = "|---|---|---|---|"
         _rows = []
-        for _, _r in K_scan_table.iterrows():
+        for _, _r in _disp.iterrows():
             _marker = " ⬅ chosen" if int(_r["K"]) == K_best else ""
-            _rows.append(f"| {int(_r['K'])} | {_r['Tc_K']:.2f} | {_r['redchi']:.2f} | {_r['p_value']:.3f}{_marker} |")
-        _scan_md = "\n".join([_hdr, _sep, *_rows])
+            _rows.append(f"| {int(_r['K'])} | {_r['Tc_K']:.2f} | {_r['redchi']:.2f} | {_r['p_value']:.3g}{_marker} |")
+        _truncated_note = f"\n\n_({len(K_scan_table) - len(_disp)} larger-K rows omitted; their $p$-values are at or below noise.)_" if len(_disp) < len(K_scan_table) else ""
+        _scan_md = "\n".join([_hdr, _sep, *_rows]) + _truncated_note
     else:
         _scan_md = "_(K-scan table empty.)_"
 
@@ -1145,6 +1151,7 @@ def _(FIT_UPPER_MARGIN_K, K_MIN, K_best, K_scan_table, Tc_C, Tc_K, fit_mask, mo,
 
 @app.cell
 def _(
+    K_best,
     M0_sq_all,
     T_all,
     Tc_K,
@@ -1160,45 +1167,39 @@ def _(
     sigma_Tc_K,
     sigma_Tc_headline_stat,
 ):
-    fig_msq, ax_msq = plt.subplots(figsize=(7.2, 4.4), constrained_layout=True)
+    fig_msq, ax_msq = plt.subplots(figsize=(7.4, 4.6), constrained_layout=True)
 
     scale = 1e6  # (A/m)^2 -> (kA/m)^2
+
+    # Shade the K-scan fit window in T so the reader can see at a
+    # glance which points fed the line.
+    _T_in = T_all[fit_mask]
+    if _T_in.size:
+        ax_msq.axvspan(
+            float(_T_in.min()), float(_T_in.max()),
+            color="C0", alpha=0.07, zorder=0,
+        )
 
     excl = ~fit_mask
     if excl.any():
         ax_msq.errorbar(
-            T_all[excl],
-            M0_sq_all[excl] / scale,
-            xerr=sT_all[excl],
-            yerr=sM0_sq_all[excl] / scale,
-            fmt="o",
-            color="0.65",
-            markersize=2.6,
-            elinewidth=0.6,
-            alpha=0.55,
-            label="excluded",
+            T_all[excl], M0_sq_all[excl] / scale,
+            xerr=sT_all[excl], yerr=sM0_sq_all[excl] / scale,
+            fmt="o", color="0.6", markersize=2.8, elinewidth=0.6,
+            alpha=0.55, label="excluded loops",
         )
     ax_msq.errorbar(
-        T_all[fit_mask],
-        M0_sq_all[fit_mask] / scale,
-        xerr=sT_all[fit_mask],
-        yerr=sM0_sq_all[fit_mask] / scale,
-        fmt="o",
-        color="C0",
-        markersize=3.4,
-        elinewidth=0.7,
-        alpha=0.85,
-        label=r"fit window (near-$T_c$ ODR)",
+        T_all[fit_mask], M0_sq_all[fit_mask] / scale,
+        xerr=sT_all[fit_mask], yerr=sM0_sq_all[fit_mask] / scale,
+        fmt="o", color="C0", markersize=3.6, elinewidth=0.8,
+        alpha=0.9, label=rf"fit window ($K^{{*}}={K_best}$ pts)",
     )
 
-    T_line = np.linspace(float(T_all[fit_mask].min()), Tc_K + 5.0, 200)
+    T_line = np.linspace(float(_T_in.min()), Tc_K + 3.0, 200)
     ax_msq.plot(
-        T_line,
-        (msq_slope * T_line + msq_intercept) / scale,
-        "-",
-        color="C3",
-        linewidth=2.0,
-        label=rf"mean-field fit: $T_c={Tc_K:.1f}\pm{sigma_Tc_K:.1f}\,\mathrm{{K}}$",
+        T_line, (msq_slope * T_line + msq_intercept) / scale,
+        "-", color="C3", linewidth=2.0,
+        label=rf"mean-field $T_c={Tc_K:.1f}\pm{sigma_Tc_K:.1f}\,\mathrm{{K}}$",
     )
     ax_msq.axhline(0, color="0.4", linewidth=0.6, linestyle="--")
     ax_msq.axvline(Tc_K, color="C3", linewidth=0.8, linestyle=":")
@@ -1208,34 +1209,26 @@ def _(
     # the deep-T M_0^2 values that the fit deliberately excludes.
     _y_max_fit = float(M0_sq_all[fit_mask].max() / scale)
     ax_msq.set_ylim(-0.10 * _y_max_fit, 1.4 * _y_max_fit)
-
     ymin, ymax = ax_msq.get_ylim()
     ax_msq.fill_betweenx(
-        [ymin, ymax],
-        Tc_K - sigma_Tc_K,
-        Tc_K + sigma_Tc_K,
-        color="C3",
-        alpha=0.10,
+        [ymin, ymax], Tc_K - sigma_Tc_K, Tc_K + sigma_Tc_K,
+        color="C3", alpha=0.10,
     )
 
     if np.isfinite(Tc_headline):
         ax_msq.axvline(
-            Tc_headline,
-            color="C2",
-            linewidth=1.2,
-            linestyle="-",
-            label=rf"half-height headline: $T_c={Tc_headline:.1f}\pm{sigma_Tc_headline_stat:.2f}\,\mathrm{{K}}$ (stat)",
+            Tc_headline, color="C2", linewidth=1.4, linestyle="-",
+            label=rf"half-height headline $T_c={Tc_headline:.1f}\pm{sigma_Tc_headline_stat:.2f}\,\mathrm{{K}}$",
         )
 
     ax_msq.set_ylim(ymin, ymax)
-
     ax_msq.set_xlabel(r"$T$ (K)")
     ax_msq.set_ylabel(r"$M_0^2$ (kA$^2\,$m$^{-2}$)")
-    ax_msq.set_title(r"Method 3: near-$T_c$ mean-field $M_0^2(T)$ fit, with headline half-height $T_c$")
+    ax_msq.set_title(r"Mean-field $M_0^2(T)$ fit (Method III cross-check)")
     ax_msq.minorticks_on()
     ax_msq.grid(True, which="major", alpha=0.25)
     ax_msq.grid(True, which="minor", alpha=0.10)
-    ax_msq.legend(loc="upper right", fontsize=8)
+    ax_msq.legend(loc="upper right", fontsize=8, framealpha=0.95)
 
     save_figure(fig_msq, "curie_method3_M0sq")
     fig_msq
@@ -1395,12 +1388,13 @@ def _(
         s=16, color="C2", alpha=0.80, label="background-fit quartile",
     )
     _ax_temp.axvline(_ready_time, color="C3", linestyle="--", linewidth=1.0, label="field-ready cut")
+    _ax_temp.set_xlabel(r"time (s)")
     _ax_temp.set_ylabel(r"$T$ (K)")
-    _ax_temp.set_title("Curie acquisition quality control")
+    _ax_temp.set_title("Thermal trajectory")
     _ax_temp.grid(True, which="major", alpha=0.25)
     _ax_temp.minorticks_on()
     _ax_temp.grid(True, which="minor", alpha=0.10)
-    _ax_temp.legend(loc="best", fontsize=8)
+    _ax_temp.legend(loc="lower right", fontsize=8, framealpha=0.95)
 
     _ax_field.errorbar(
         _retained_temperature,
@@ -1408,13 +1402,20 @@ def _(
         xerr=summary["sigma_T_K"].to_numpy(),
         fmt="o", color="C0", ecolor="C0", alpha=0.70,
         markersize=3.0, elinewidth=0.5, capsize=1.5,
+        label="per-loop branch $|H|_\\mathrm{max}$",
     )
-    _ax_field.axvline(field_ready_temperature_K, color="C3", linestyle="--", linewidth=1.0)
+    _ax_field.axvline(
+        field_ready_temperature_K, color="C3", linestyle="--", linewidth=1.0,
+        label="field-ready cut",
+    )
     _ax_field.set_xlabel(r"$T$ (K)")
     _ax_field.set_ylabel(r"common $|H|_\mathrm{max}$ (A m$^{-1}$)")
+    _ax_field.set_title("Drive-field plateau check")
     _ax_field.grid(True, which="major", alpha=0.25)
     _ax_field.minorticks_on()
     _ax_field.grid(True, which="minor", alpha=0.10)
+    _ax_field.legend(loc="lower right", fontsize=8, framealpha=0.95)
+    _fig_acq.suptitle("Curie acquisition quality control", fontsize=11)
 
     save_figure(_fig_acq, "curie_acquisition_qc")
     _fig_acq
@@ -1836,49 +1837,53 @@ def _(
     sigma_Tc_CW,
     sigma_chi_vals,
 ):
-    # Plot 1/chi vs T, marking the paramagnetic-regime fit window and
-    # the Curie-Weiss fit line + T_c x-intercept.
-    fig_cw, ax_cw = plt.subplots(figsize=(7.2, 4.4), constrained_layout=True)
+    # Plot 1/chi vs T with the Curie-Weiss line and Tc x-intercept.
+    # Shade the excluded region so the fit window edge is unambiguous.
+    fig_cw, ax_cw = plt.subplots(figsize=(7.4, 4.6), constrained_layout=True)
 
     _good = np.isfinite(chi_vals) & (chi_vals > 0)
     _T_all = TEMPERATURE_K[_good]
     _inv_chi_all = 1.0 / chi_vals[_good]
     _sigma_inv_all = sigma_chi_vals[_good] / chi_vals[_good] ** 2
 
+    _edge = Tc_seed_CW + CW_BUFFER_K
+    ax_cw.axvspan(
+        float(_T_all.min()) - 5.0, _edge,
+        color="0.85", alpha=0.35, zorder=0,
+        label=rf"excluded ($T \leq T_c^\mathrm{{seed}}+{CW_BUFFER_K:.0f}\,\mathrm{{K}}$)",
+    )
+
     _used = mask_CW[_good]
     if (~_used).any():
         ax_cw.errorbar(
             _T_all[~_used], _inv_chi_all[~_used], yerr=_sigma_inv_all[~_used],
-            fmt="o", color="0.65", markersize=2.6, elinewidth=0.5,
-            alpha=0.55, label=r"excluded ($T \leq T_c^\mathrm{seed}+$buffer)",
+            fmt="o", color="0.55", markersize=2.8, elinewidth=0.6,
+            alpha=0.7,
         )
     if _used.any():
         ax_cw.errorbar(
             _T_all[_used], _inv_chi_all[_used], yerr=_sigma_inv_all[_used],
-            fmt="o", color="C0", markersize=3.4, elinewidth=0.7,
-            alpha=0.85, label=r"fit window (paramagnetic)",
+            fmt="o", color="C0", markersize=3.6, elinewidth=0.8,
+            alpha=0.9, label="paramagnetic fit window",
         )
 
     if cw_result is not None and np.isfinite(Tc_CW):
         _T_line = np.linspace(Tc_CW, float(_T_all.max()) + 5.0, 200)
         ax_cw.plot(
             _T_line, m_CW * _T_line + b_CW, "-", color="C3", linewidth=2.0,
-            label=rf"Curie–Weiss: $T_c={Tc_CW:.1f}\pm{sigma_Tc_CW:.1f}\,\mathrm{{K}}$",
+            label=rf"Curie–Weiss $T_c={Tc_CW:.1f}\pm{sigma_Tc_CW:.1f}\,\mathrm{{K}}$",
         )
         ax_cw.axvline(Tc_CW, color="C3", linewidth=0.8, linestyle=":")
 
-    ax_cw.axvline(
-        Tc_seed_CW + CW_BUFFER_K, color="0.4", linewidth=0.8, linestyle="--",
-        label=rf"$T_c^\mathrm{{seed}}+{CW_BUFFER_K:.0f}\,\mathrm{{K}}$ (window edge)",
-    )
     ax_cw.axhline(0, color="0.4", linewidth=0.6, linestyle="--")
+    ax_cw.set_xlim(float(_T_all.min()) - 2.0, float(_T_all.max()) + 5.0)
     ax_cw.set_xlabel(r"$T$ (K)")
     ax_cw.set_ylabel(r"$1/\chi$ (arb. units)")
-    ax_cw.set_title(r"Method IV: Curie–Weiss — $1/\chi(T)$ above $T_c$")
+    ax_cw.set_title(r"Curie–Weiss $1/\chi(T)$ above $T_c$ (Method IV cross-check)")
     ax_cw.minorticks_on()
     ax_cw.grid(True, which="major", alpha=0.25)
     ax_cw.grid(True, which="minor", alpha=0.10)
-    ax_cw.legend(loc="lower right", fontsize=8)
+    ax_cw.legend(loc="lower right", fontsize=8, framealpha=0.95)
 
     save_figure(fig_cw, "curie_method4_curie_weiss")
     fig_cw
@@ -2094,52 +2099,63 @@ def _(
     sigma_Tc_headline_stat,
     syst_total,
 ):
-    _fig_tc, _ax_tc = plt.subplots(figsize=(7.6, 4.8), constrained_layout=True)
+    _fig_tc, _ax_tc = plt.subplots(figsize=(7.8, 4.8), constrained_layout=True)
 
     if np.isfinite(Tc_headline) and np.isfinite(syst_total):
         _ax_tc.axhspan(
-            Tc_headline - syst_total,
-            Tc_headline + syst_total,
-            color="C0", alpha=0.08, label=r"headline systematic band",
+            Tc_headline - syst_total, Tc_headline + syst_total,
+            color="C0", alpha=0.08, label=r"headline $\pm\sigma_\mathrm{syst}$",
         )
     if np.isfinite(Tc_headline) and np.isfinite(sigma_Tc_headline_stat):
         _ax_tc.axhspan(
             Tc_headline - sigma_Tc_headline_stat,
             Tc_headline + sigma_Tc_headline_stat,
-            color="C0", alpha=0.20, label=r"headline statistical band",
+            color="C0", alpha=0.22, label=r"headline $\pm\sigma_\mathrm{stat}$",
         )
-        _ax_tc.axhline(Tc_headline, color="C0", linewidth=1.5, label=rf"headline ${Tc_headline:.1f}$ K")
+        _ax_tc.axhline(
+            Tc_headline, color="C0", linewidth=1.5,
+            label=rf"headline $T_c={Tc_headline:.1f}$ K",
+        )
 
     _x_positions = []
     _x_labels = []
+    _group_edges = []  # (x_left, x_right, label)
+
     _finite_methods = diagnostics_with_sigma.dropna(subset=["Tc_K"])
     _method_labels = [r"$M_r$", r"$M_\mathrm{sat}$", r"$M_0$"]
+    _group_left_I = 0
     for _x, (_, _row) in enumerate(_finite_methods.iterrows()):
         _ax_tc.errorbar(
             _x, _row["Tc_K"], yerr=_row["sigma_Tc_K"],
-            fmt="o", color="C0", ecolor="C0", capsize=3, markersize=5,
-            label="run first: methods I-III" if _x == 0 else None,
+            fmt="o", color="C0", ecolor="C0", capsize=3, markersize=6,
+            label="run first: half-height (I, II, III)" if _x == 0 else None,
         )
         _x_positions.append(_x)
         _x_labels.append(_method_labels[_x] if _x < len(_method_labels) else _row["method"])
+    _group_edges.append((_group_left_I, len(_x_positions) - 1, "Methods I–III"))
 
     _finite_runs = cross_run.dropna(subset=["Tc_K_half"]) if "Tc_K_half" in cross_run.columns else cross_run.iloc[0:0]
     _start = len(_x_positions) + 1
+    _group_left_R = _start
     for _j, (_, _row) in enumerate(_finite_runs.iterrows()):
         _x = _start + _j
         _ax_tc.errorbar(
             _x, _row["Tc_K_half"], yerr=_row["sigma_Tc_K_half"],
-            fmt="s", color="C2", ecolor="C2", capsize=3, markersize=5,
+            fmt="s", color="C2", ecolor="C2", capsize=3, markersize=6,
             label=r"cross-run $M_0$ half-height" if _j == 0 else None,
         )
         _x_positions.append(_x)
         _x_labels.append(str(_row["run"]))
+    if _finite_runs.shape[0]:
+        _group_edges.append((_group_left_R, _x_positions[-1], "Run 1/2/3"))
 
-    _x = (_x_positions[-1] + 1.4) if _x_positions else 0.0
+    _x = (_x_positions[-1] + 1.5) if _x_positions else 0.0
+    _group_left_X = _x
     if np.isfinite(Tc_K):
-        _ax_tc.plot(
-            _x, Tc_K, marker="D", color="C3", mfc="white", markersize=5,
-            linestyle="None", label=rf"mean-field cross-check ($\sigma={sigma_Tc_K:.0f}$ K)",
+        _ax_tc.errorbar(
+            _x, Tc_K, yerr=sigma_Tc_K,
+            fmt="D", color="C3", mfc="white", ecolor="C3", capsize=3, markersize=6,
+            label=rf"mean-field cross-check",
         )
         _x_positions.append(_x)
         _x_labels.append(r"MF")
@@ -2147,19 +2163,29 @@ def _(
     if np.isfinite(Tc_CW):
         _ax_tc.errorbar(
             _x, Tc_CW, yerr=sigma_Tc_CW,
-            fmt="^", color="C4", ecolor="C4", capsize=3, markersize=5,
-            label="Curie-Weiss cross-check",
+            fmt="^", color="C4", ecolor="C4", capsize=3, markersize=6,
+            label="Curie–Weiss cross-check",
         )
         _x_positions.append(_x)
         _x_labels.append(r"CW")
+    if _x_positions[-1] >= _group_left_X:
+        _group_edges.append((_group_left_X, _x_positions[-1], "Cross-checks"))
+
+    # Light vertical separators between the three groups for readability.
+    for _i, (_a, _b, _) in enumerate(_group_edges[:-1]):
+        _next_a = _group_edges[_i + 1][0]
+        _ax_tc.axvline(
+            0.5 * (_b + _next_a), color="0.85", linewidth=0.8,
+            linestyle=":", zorder=0,
+        )
 
     _ax_tc.set_xticks(_x_positions, _x_labels)
-    _ax_tc.set_ylabel(r"transition estimate $T_c$ (K)")
-    _ax_tc.set_title(r"Curie-transition estimates and cross-checks")
+    _ax_tc.set_ylabel(r"$T_c$ (K)")
+    _ax_tc.set_title(r"Curie temperature: estimators and cross-checks")
     _ax_tc.grid(True, axis="y", which="major", alpha=0.25)
     _ax_tc.minorticks_on()
     _ax_tc.grid(True, axis="y", which="minor", alpha=0.10)
-    _ax_tc.legend(loc="best", fontsize=8)
+    _ax_tc.legend(loc="best", fontsize=8, framealpha=0.95, ncol=1)
 
     save_figure(_fig_tc, "curie_tc_summary")
     _fig_tc
