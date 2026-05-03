@@ -14,19 +14,20 @@ Raw measurements from the $B$–$H$ curve and vacuum-permeability experiment.
 | $A$   | $0.0016~\text{m}^2$                    | ring cross-section area |
 | $\mu_0$ | $1.25663706127\times 10^{-6}~\text{T·m/A}$ | vacuum permeability (CODATA) |
 
-## Derived quantities — initial magnetization curve (`virgin-curve`)
+## Derived quantities — peak-envelope magnetization curve (legacy sheet `virgin-curve`)
 
 `proc.py` treats the voltage columns as authoritative and recalculates the
 derived fields; any precomputed spreadsheet columns are only a legacy check.
 
-The scope readings are peak-to-peak values on the hysteresis loop, so the
-processing uses half of each recorded voltage:
+The scope readings are peak-to-peak extents of the hysteresis loop, so the
+processing uses half of each recorded voltage. This gives the loop envelope,
+not the full loop trajectory:
 
 $$H = \frac{\Delta V_x \, N}{2 L \, R_x} \quad[\text{A/m}]$$
 
 $$B = \frac{\Delta V_y \, R_y \, C}{2 N \, A} \quad[\text{T}]$$
 
-$$\mu = \frac{B}{H} \quad[\text{T·m/A}], \qquad \mu_\text{rel} = \frac{\mu}{\mu_0}$$
+$$\mu = \frac{B}{H} \quad[\text{T·m/A}], \qquad \mu_{\mathrm{r}} = \frac{\mu}{\mu_0}$$
 
 $H$ uses $N$ as the *primary* turn count; $B$ uses $N$ as the *secondary* turn
 count. The apparatus stores a single $N$ so the formulas assume

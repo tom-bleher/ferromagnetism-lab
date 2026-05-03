@@ -62,6 +62,7 @@ def _():
     import matplotlib.pyplot as plt
     from matplotlib.colors import Normalize
     from matplotlib.lines import Line2D
+    from scipy.optimize import least_squares
     from scipy.signal import savgol_filter
 
     from taulab import fit_functions, odr_fit, read_table
@@ -133,6 +134,7 @@ def _():
         SIGMA_T_ABS_K,
         TARGET_LOOP_TEMPERATURES_K,
         fit_functions,
+        least_squares,
         np,
         odr_fit,
         pd,
@@ -673,6 +675,12 @@ def _(
         np.abs(summary["M_0_A_per_m"].to_numpy()),
         summary["sigma_M_0_A_per_m"].to_numpy(),
     )
+    summary["M_0_snr"] = np.abs(summary["M_0_A_per_m"].to_numpy()) / np.maximum(
+        summary["sigma_M_0_A_per_m"].to_numpy(), 1e-30,
+    )
+    summary["M_0_positive"] = summary["M_0_A_per_m"] > 0
+    summary["M_0_fit_valid"] = summary["M_0_positive"] & (summary["M_0_snr"] > 3.0)
+    summary["field_fraction_of_common"] = summary["branch_hmax_A_per_m"] / common_hmax
 
     _T_used = summary["temperature_K"].to_numpy()
     _sT_used = summary["sigma_T_K"].to_numpy()
@@ -1242,6 +1250,185 @@ def _(
 
 
 @app.cell
+def _(least_squares, np, pd, summary):
+    # Method V: full mean-field self-consistency fit from the official
+    # magnetfit2 script. This keeps the guide's finite-field tanh model
+    # in addition to the half-height, M0^2, and Curie-Weiss methods.
+    _KB = 1.380649e-23
+    _MU_B = 9.2740100783e-24
+    MEANFIELD_FULL_FLOOR_FRAC = 0.01
+
+    def _meanfield_magnetization(_temperature_K, _Tc_K, _H_eff):
+        _temperature_K = np.asarray(_temperature_K, dtype=float)
+        _drive = _MU_B * _H_eff / (_KB * _temperature_K)
+        _coupling = _Tc_K / _temperature_K
+        _m = np.full_like(_temperature_K, 0.8, dtype=float)
+        for _ in range(800):
+            _next = np.tanh(_drive + _coupling * _m)
+            if np.max(np.abs(_next - _m)) < 1e-12:
+                _m = _next
+                break
+            _m = _next
+        return np.clip(_m, 0.0, 1.0)
+
+    def _fit_full_meanfield(_label, _column, _sigma_column):
+        _T = summary["temperature_K"].to_numpy(float)
+        _raw = summary[_column].to_numpy(float)
+        _y = np.clip(_raw, 0.0, None)
+        _sigma = np.maximum(summary[_sigma_column].to_numpy(float), 1e-12)
+        _floor = MEANFIELD_FULL_FLOOR_FRAC * float(np.nanmax(_y))
+        _sigma_eff = np.sqrt(_sigma**2 + _floor**2)
+        _mask = np.isfinite(_T) & np.isfinite(_y) & np.isfinite(_sigma_eff) & (_sigma_eff > 0)
+        _T, _y, _sigma_eff = _T[_mask], _y[_mask], _sigma_eff[_mask]
+        _y_max = float(np.max(_y))
+
+        def _residual(_params):
+            _Tc_fit, _Msat_fit, _H_eff_fit = _params
+            _model = _Msat_fit * _meanfield_magnetization(_T, _Tc_fit, _H_eff_fit)
+            return (_y - _model) / _sigma_eff
+
+        _result = least_squares(
+            _residual,
+            x0=np.array([230.0, _y_max, 1.0]),
+            bounds=(np.array([150.0, 0.10 * _y_max, 0.0]), np.array([330.0, 5.0 * _y_max, 1000.0])),
+            x_scale=np.array([20.0, max(_y_max, 1.0), 1.0]),
+            max_nfev=10000,
+        )
+        _chi2 = float(np.sum(_result.fun**2))
+        _dof = max(1, int(_T.size - _result.x.size))
+        _redchi = _chi2 / _dof
+        try:
+            _cov = np.linalg.pinv(_result.jac.T @ _result.jac) * max(_redchi, 1.0)
+            _errs = np.sqrt(np.maximum(np.diag(_cov), 0.0))
+        except np.linalg.LinAlgError:
+            _errs = np.full(3, np.nan)
+
+        _T_grid = np.linspace(float(_T.min()), float(_T.max()), 500)
+        _model_grid = _result.x[1] * _meanfield_magnetization(_T_grid, _result.x[0], _result.x[2])
+        _curve = pd.DataFrame({
+            "method": _label,
+            "temperature_K": _T_grid,
+            "model_A_per_m": _model_grid,
+        })
+        _points = pd.DataFrame({
+            "method": _label,
+            "temperature_K": _T,
+            "signal_A_per_m": _y,
+            "sigma_eff_A_per_m": _sigma_eff,
+        })
+        _record = {
+            "method": _label,
+            "column": _column,
+            "Tc_K": float(_result.x[0]),
+            "sigma_Tc_K": float(_errs[0]),
+            "M_sat_A_per_m": float(_result.x[1]),
+            "sigma_M_sat_A_per_m": float(_errs[1]),
+            "H_eff": float(_result.x[2]),
+            "sigma_H_eff": float(_errs[2]),
+            "chi2": _chi2,
+            "dof": _dof,
+            "redchi": _redchi,
+            "sigma_floor_A_per_m": _floor,
+            "n_points": int(_T.size),
+            "success": bool(_result.success),
+        }
+        return _record, _points, _curve
+
+    _specs = [
+        (r"I: $M_r$", "M_r_A_per_m", "sigma_M_r_A_per_m"),
+        (r"II: $M_\mathrm{sat}$", "M_sat_A_per_m", "sigma_M_sat_A_per_m"),
+        (r"III: $M_0$ adaptive", "M_0_A_per_m", "sigma_M_0_A_per_m"),
+        (r"IIIb: $M_0$ 5-point", "M_0_5pt_A_per_m", "sigma_M_0_A_per_m"),
+    ]
+    _records, _points_frames, _curve_frames = [], [], []
+    for _spec in _specs:
+        _record, _points, _curve = _fit_full_meanfield(*_spec)
+        _records.append(_record)
+        _points_frames.append(_points)
+        _curve_frames.append(_curve)
+
+    meanfield_full_fits = pd.DataFrame.from_records(_records)
+    meanfield_full_points = pd.concat(_points_frames, ignore_index=True)
+    meanfield_full_curves = pd.concat(_curve_frames, ignore_index=True)
+    return MEANFIELD_FULL_FLOOR_FRAC, meanfield_full_curves, meanfield_full_fits, meanfield_full_points
+
+
+@app.cell(hide_code=True)
+def _(MEANFIELD_FULL_FLOOR_FRAC, meanfield_full_fits, mo):
+    _rows = [r"| proxy | $T_c$ (K) | $M_\mathrm{sat}$ (A/m) | $H_\mathrm{eff}$ | $\chi^2/\nu$ |",
+             "|---|---:|---:|---:|---:|"]
+    for _, _row in meanfield_full_fits.iterrows():
+        _rows.append(
+            f"| {_row['method']} | {_row['Tc_K']:.2f} ± {_row['sigma_Tc_K']:.2f} | "
+            f"{_row['M_sat_A_per_m']:.0f} ± {_row['sigma_M_sat_A_per_m']:.0f} | "
+            f"{_row['H_eff']:.3g} ± {_row['sigma_H_eff']:.2g} | {_row['redchi']:.2f} |"
+        )
+    mo.md(rf"""
+    ## Method V: full mean-field self-consistency fit
+
+    The official guide also gives the finite-field mean-field equation
+
+    $$
+    \frac{{M(T)}}{{M_\mathrm{{sat}}}} =
+    \tanh\!\left(\frac{{\mu_B H_\mathrm{{eff}}}}{{k_B T}}
+    + \frac{{T_c}}{{T}}\frac{{M(T)}}{{M_\mathrm{{sat}}}}\right),
+    $$
+
+    which is the algorithm implemented in `references/official-guides/scripts/magnetfit2.py`.
+    We keep the existing half-height, $M_0^2$, and Curie-Weiss estimates, and add this
+    full self-consistency fit as an additional cross-check. Negative high-temperature
+    proxy values are treated as zero spontaneous magnetization. A small model-error floor
+    of `{100*MEANFIELD_FULL_FLOOR_FRAC:.1f}%` of each proxy's dynamic range is added in
+    quadrature to the per-loop uncertainty, because the local line-fit covariance does not
+    include background-subtraction or saturation-tail model mismatch.
+
+    {chr(10).join(_rows)}
+    """)
+    return
+
+
+@app.cell
+def _(meanfield_full_curves, meanfield_full_fits, meanfield_full_points, np, plt, save_figure):
+    _fig_mf_full, _ax_mf_full = plt.subplots(figsize=(7.6, 4.8), constrained_layout=True)
+    _styles = {
+        r"I: $M_r$": ("C0", "o"),
+        r"II: $M_\mathrm{sat}$": ("C3", "s"),
+        r"III: $M_0$ adaptive": ("C2", "^"),
+        r"IIIb: $M_0$ 5-point": ("C4", "D"),
+    }
+    for _method, _group in meanfield_full_points.groupby("method", sort=False):
+        _color, _marker = _styles[_method]
+        _ax_mf_full.errorbar(
+            _group["temperature_K"], _group["signal_A_per_m"] / 1e3,
+            yerr=_group["sigma_eff_A_per_m"] / 1e3,
+            fmt=_marker, color=_color, ecolor=_color, markersize=2.7,
+            elinewidth=0.45, alpha=0.22,
+        )
+    for _method, _group in meanfield_full_curves.groupby("method", sort=False):
+        _color, _ = _styles[_method]
+        _fit = meanfield_full_fits.loc[meanfield_full_fits["method"] == _method].iloc[0]
+        _ax_mf_full.plot(
+            _group["temperature_K"], _group["model_A_per_m"] / 1e3,
+            color=_color, linewidth=2.0,
+            label=rf"{_method}: $T_c={_fit['Tc_K']:.1f}\pm{_fit['sigma_Tc_K']:.1f}$ K",
+        )
+        _ax_mf_full.axvline(_fit["Tc_K"], color=_color, linestyle=":", linewidth=0.8, alpha=0.65)
+
+    _ax_mf_full.set_xlabel(r"$T$ (K)")
+    _ax_mf_full.set_ylabel(r"proxy signal (kA m$^{-1}$)")
+    _ax_mf_full.set_title("Full mean-field self-consistency fits")
+    _ax_mf_full.set_ylim(bottom=-0.25)
+    _ax_mf_full.minorticks_on()
+    _ax_mf_full.grid(True, which="major", alpha=0.25)
+    _ax_mf_full.grid(True, which="minor", alpha=0.10)
+    _ax_mf_full.legend(loc="upper right", fontsize=7.5, framealpha=0.95)
+
+    save_figure(_fig_mf_full, "curie_method5_full_meanfield")
+    _fig_mf_full
+    return
+
+
+@app.cell
 def _(
     Normalize,
     TARGET_LOOP_TEMPERATURES_K,
@@ -1429,11 +1616,13 @@ def _(
 
 
 @app.cell
-def _(FIG_DIR, diagnostics_with_sigma, summary):
+def _(FIG_DIR, diagnostics_with_sigma, meanfield_full_fits, summary):
     summary_path = FIG_DIR / "curie_method123_summary.csv"
     summary.to_csv(summary_path, index=False)
     diag_path = FIG_DIR / "curie_method123_tc_with_sigma.csv"
     diagnostics_with_sigma.to_csv(diag_path, index=False)
+    meanfield_path = FIG_DIR / "curie_method5_full_meanfield.csv"
+    meanfield_full_fits.to_csv(meanfield_path, index=False)
     summary_path
     return
 
@@ -1666,6 +1855,8 @@ def _(
             "sigma_Tc_K_mf": float(np.sqrt(max(0.0, var_Tc))),
             "Tc_K_half": Tc_half,
             "sigma_Tc_K_half": sigma_Tc_half,
+            "drive_current_A_rms": float(I_rms),
+            "H_median_A_per_m": float(np.median(hmax[keep])),
             "n_fit": int(mask.sum()),
             "n_loops": int(len(keep)),
             "T_min_K": float(T_K.min()),
@@ -1676,6 +1867,10 @@ def _(
     cross_run = pd.DataFrame.from_records([
         {"run": _label, **(_run_method3(_p) or {})} for _label, _p in RUN_FILES.items()
     ])
+    if "H_median_A_per_m" in cross_run.columns and not cross_run.empty:
+        _first_h = float(cross_run.loc[cross_run["run"] == "first", "H_median_A_per_m"].iloc[0])
+        cross_run["drive_fraction_vs_first"] = cross_run["H_median_A_per_m"] / _first_h
+        cross_run["low_drive_flag"] = cross_run["drive_fraction_vs_first"] < 0.80
     return (cross_run,)
 
 
@@ -1918,7 +2113,7 @@ def _(
 
 
 @app.cell(hide_code=True)
-def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr_result, redchi_CW, sigma_Tc_CW, sigma_Tc_K):
+def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, meanfield_full_fits, mo, np, odr_result, redchi_CW, sigma_Tc_CW, sigma_Tc_K):
     # Bottom-line. The half-height crossings of M_r, M_sat, and M_0
     # (Methods I, II, III in normalized form) are the headline
     # estimators because they are model-free: each locates the
@@ -1966,13 +2161,23 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
         birge_combine = float("nan")
 
     finite_runs = cross_run.dropna(subset=["Tc_K_half"]) if "Tc_K_half" in cross_run.columns else cross_run.iloc[0:0]
-    run_tcs_half = finite_runs["Tc_K_half"].to_numpy(dtype=float) if not finite_runs.empty else np.array([])
-    run_spread = float(np.std(run_tcs_half, ddof=1)) if len(run_tcs_half) >= 2 else 0.0
+    run_tcs_half_all = finite_runs["Tc_K_half"].to_numpy(dtype=float) if not finite_runs.empty else np.array([])
+    run_spread_all = float(np.std(run_tcs_half_all, ddof=1)) if len(run_tcs_half_all) >= 2 else 0.0
+    if "low_drive_flag" in finite_runs.columns:
+        finite_runs_preferred = finite_runs.loc[~finite_runs["low_drive_flag"]]
+    else:
+        finite_runs_preferred = finite_runs
+    run_tcs_half_preferred = finite_runs_preferred["Tc_K_half"].to_numpy(dtype=float) if not finite_runs_preferred.empty else np.array([])
+    run_spread = float(np.std(run_tcs_half_preferred, ddof=1)) if len(run_tcs_half_preferred) >= 2 else run_spread_all
 
     # Systematic budget: combines the inter-method spread (within-run
     # methodological systematic) with the run-to-run spread of the
     # *half-height* T_c per run (cross-run systematic on the same
-    # estimator family). The mean-field-vs-half-height shift is NOT
+    # estimator family). The low-drive third run is kept in the table but
+    # not in the preferred run-spread term because Method III assumes a
+    # saturated tail; the low drive makes that assumption visibly weaker.
+    # The all-run spread is still reported as a conservative alternative.
+    # The mean-field-vs-half-height shift is NOT
     # added in quadrature here: the mean-field model is not adopted as
     # the headline estimator (its narrow-window linear approximation
     # produces a chi^2/nu >> 1 fit and a Birge-rescaled error bar that
@@ -1987,14 +2192,23 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
     # half-height headline, kept for context but not in the systematic.
     mf_shift_display = float(abs(Tc_K - Tc_headline)) if np.isfinite(Tc_K) and np.isfinite(Tc_headline) else 0.0
 
-    def _row_half(name, tc, stc, n_loops, redchi):
-        stc_str = f"{stc:.2f}" if np.isfinite(stc) else "—"
-        return f"| {name} | {tc:.2f} | {stc_str} | {int(n_loops)} | {redchi:.1f} |"
+    def _row_half(r):
+        _name = f"Method 3 half-height, run `{r['run']}`"
+        _stc = r["sigma_Tc_K_half"]
+        stc_str = f"{_stc:.2f}" if np.isfinite(_stc) else "—"
+        _frac = r.get("drive_fraction_vs_first", np.nan)
+        _drive_str = f"{_frac:.2f}" if np.isfinite(_frac) else "—"
+        _flag = "low-drive check" if bool(r.get("low_drive_flag", False)) else "preferred"
+        return f"| {_name} | {r['Tc_K_half']:.2f} | {stc_str} | {int(r['n_loops'])} | {_drive_str} | {r['redchi']:.1f} | {_flag} |"
 
     cross_rows_half = [
-        _row_half(f"Method 3 half-height, run `{r['run']}`",
-                  r["Tc_K_half"], r["sigma_Tc_K_half"], r["n_loops"], r["redchi"])
+        _row_half(r)
         for _, r in finite_runs.iterrows() if np.isfinite(r["Tc_K_half"])
+    ]
+
+    meanfield_full_rows = [
+        f"| {r['method']} | {r['Tc_K']:.2f} | {r['sigma_Tc_K']:.2f} | {r['H_eff']:.3g} | {r['redchi']:.2f} |"
+        for _, r in meanfield_full_fits.iterrows() if np.isfinite(r["Tc_K"])
     ]
 
     method_rows = [
@@ -2016,13 +2230,14 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
 
     **Half-height crossings of $M_0$ across the three runs** (cross-run check on the same estimator):
 
-    | Run | $T_c^\mathrm{{half}}$ (K) | $\sigma_{{T_c}}^\mathrm{{boot}}$ (K) | n_loops | mean-field $\chi^2/\nu$ |
-    |---|---|---|---|---|
+    | Run | $T_c^\mathrm{{half}}$ (K) | $\sigma_{{T_c}}^\mathrm{{boot}}$ (K) | n_loops | drive fraction | mean-field $\chi^2/\nu$ | status |
+    |---|---|---|---|---|---|---|
     {chr(10).join(cross_rows_half)}
 
-    The far-right column is the reduced chi-square of the mean-field
-    fit on the same run (shown for context only — see the cross-check
-    block at the end of this callout).
+    The low-drive third run is kept as a diagnostic, but the preferred
+    run-spread term below uses only the high-drive `first` and `second`
+    runs. Including all three gives a conservative all-drive spread of
+    $\sigma_\text{{run,all}}={run_spread_all:.1f}\,\mathrm{{K}}$.
 
     **Headline value (model-free, half-height across methods 1, 2, 3-normalized, run `first`):**
 
@@ -2047,7 +2262,7 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
     The systematic 1-$\sigma$ combines
 
     - method-to-method spread of the half-height crossings within run `first`: $\sigma_\text{{method}}={method_spread:.1f}\,\mathrm{{K}}$;
-    - run-to-run spread of the half-height $T_c$ on the three sweeps: $\sigma_\text{{run}}={run_spread:.1f}\,\mathrm{{K}}$;
+    - run-to-run spread of the half-height $T_c$ on the preferred high-drive sweeps: $\sigma_\text{{run}}={run_spread:.1f}\,\mathrm{{K}}$;
 
     in quadrature.
 
@@ -2056,7 +2271,21 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
     single run; it does not affect $\sigma_{{T_c}}^\text{{stat}}$ and is
     partially probed by $\sigma_\text{{run}}$ above.
 
-    **Cross-check: mean-field $T_c$ on run `first`.**
+    **Method V: full self-consistency mean-field fit.**
+    The official `magnetfit2` algorithm uses the finite-field tanh equation,
+    not the linearized $M_0^2\propto T_c-T$ approximation:
+
+    | proxy | $T_c$ (K) | $\sigma_{{T_c}}$ (K) | $H_\mathrm{{eff}}$ | $\chi^2/\nu$ |
+    |---|---:|---:|---:|---:|
+    {chr(10).join(meanfield_full_rows)}
+
+    This is now kept as Method V. It is not removed or substituted for
+    the half-height family because the fitted $T_c$ depends strongly on
+    which loop proxy is fed to the self-consistency equation; that spread
+    is itself useful evidence for finite-drive and tail-extraction
+    systematics.
+
+    **Cross-check: linearized mean-field $T_c$ on run `first`.**
     The $M_0^2(T)\propto T_c-T$ form is a near-$T_c$ approximation.
     With the $p$-value $K$-scan selecting the optimal linear window,
     the ODR fit gives $T_c^\mathrm{{MF}}={Tc_K:.1f}\pm{sigma_Tc_K:.1f}\,\mathrm{{K}}$
@@ -2118,6 +2347,7 @@ def _(
     Tc_headline,
     cross_run,
     diagnostics_with_sigma,
+    meanfield_full_fits,
     np,
     plt,
     save_figure,
@@ -2187,6 +2417,18 @@ def _(
         _x_positions.append(_x)
         _x_labels.append(r"MF")
         _x += 1.0
+    _finite_full = meanfield_full_fits.dropna(subset=["Tc_K"])
+    _full_labels = [r"$M_r$", r"$M_\mathrm{sat}$", r"$M_0$", r"$M_0^{5}$"]
+    _group_left_F = _x
+    for _k, (_, _row) in enumerate(_finite_full.iterrows()):
+        _ax_tc.errorbar(
+            _x, _row["Tc_K"], yerr=_row["sigma_Tc_K"],
+            fmt="P", color="C5", ecolor="C5", capsize=3, markersize=6,
+            label="full tanh mean-field" if _k == 0 else None,
+        )
+        _x_positions.append(_x)
+        _x_labels.append(_full_labels[_k] if _k < len(_full_labels) else "tanh")
+        _x += 1.0
     if np.isfinite(Tc_CW):
         _ax_tc.errorbar(
             _x, Tc_CW, yerr=sigma_Tc_CW,
@@ -2220,6 +2462,8 @@ def _(
         _all_centers.append(float(Tc_K))
     if np.isfinite(Tc_CW):
         _all_centers.append(float(Tc_CW))
+    for _, _r in _finite_full.iterrows():
+        _all_centers.append(float(_r["Tc_K"]))
     if _all_centers:
         _y_lo = min(_all_centers + [Tc_headline - syst_total]) - 5.0
         _y_hi = max(_all_centers + [Tc_K + sigma_Tc_K]) + 5.0

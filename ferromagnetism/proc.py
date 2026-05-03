@@ -16,7 +16,7 @@ def _(mo):
     mo.md(r"""
     # Ferromagnetism
 
-    ### **Part A — Magnetization curve of the iron core**
+    ### **Part A — Peak-envelope magnetization curve of the iron core**
 
     Primary AC current is swept; the scope dual-cursor readings
     $\Delta V_x,\Delta V_y$ span the **full peak-to-peak** of each axis
@@ -25,7 +25,10 @@ def _(mo):
 
     $$H = \frac{N}{2\,L\,R_x}\,\Delta V_x, \qquad B = \frac{R_y\,C}{2\,N\,A}\,\Delta V_y.$$
 
-    Cubic-spline fits give smooth $B(H)$ and $\mu_r(H)=\frac{B}{\mu_0 H}$.
+    Cubic-spline interpolation gives smooth peak-envelope $B(H)$ and
+    $\mu_{\mathrm{r}}(H)=\frac{B}{\mu_0 H}$ curves. The full loop trajectory was not
+    exported, so this is an envelope measurement rather than a first-branch
+    magnetization curve and cannot give $B_r$, $H_c$, or loop area.
 
     ### **Part B — Vacuum permeability $\mu_0$**
 
@@ -258,7 +261,7 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Part A — Initial magnetization curve $B(H)$ and $\mu_r(H)$
+    ## Part A — Peak-envelope magnetization curve $B(H)$ and $\mu_{\mathrm{r}}(H)$
 
     **Scope of Part A.** The data captured here is a 13-row table of
     $(\Delta V_x, \Delta V_y)$ peak-to-peak readings, one per primary
@@ -266,7 +269,7 @@ def _(mo):
     *peak-to-peak extent* (top-bottom and left-right excursion on the
     XY display); the loop trajectory itself was not exported. From
     these readings we can extract $B_{\text{peak}}$, $H_{\text{peak}}$,
-    $\mu_r(H)$, and the saturation $B$-value, but **not** the
+    $\mu_{\mathrm{r}}(H)$, and the high-field $B$-value, but **not** the
     remanence $B_r=B(H=0)$, the coercivity $H_c=H$ at $B=0$, or the
     hysteresis-loop area (energy loss per cycle). Those would require
     sampling the full loop (XY-mode waveform export, as the Curie
@@ -285,6 +288,7 @@ def _(
     u_V,
     unp,
 ):
+    # Workbook sheet name is historical; these points are peak-to-peak envelope readings.
     pt1 = read_table(DATA_XLSX, sheet_name='virgin-curve', usecols=[0, 1])
     pt1.columns = ['dVx', 'dVy']
 
@@ -306,7 +310,7 @@ def _(
 
 @app.cell
 def _(CubicSpline, FIG_DIR, np, plt, pt1):
-    # B(H) anchored at the origin (initial magnetization starts at (0, 0));
+    # B(H) anchored at the origin for plotting the peak-envelope curve;
     # μ_r(H) not anchored — μ_r(0) is a finite initial permeability we
     # do not measure directly.
     H_nodes = np.concatenate([[0.0], pt1['H'].to_numpy()])
@@ -341,19 +345,19 @@ def _(CubicSpline, FIG_DIR, np, plt, pt1):
     axB.grid(True, which='minor', alpha=0.10)
 
     axMu.plot(Hmu_grid, cs_mu(Hmu_grid), '-', color=C_MU, alpha=0.85,
-              label=r'$\mu_r$  spline')
+              label=r'$\mu_{\mathrm{r}}$  spline')
     axMu.errorbar(pt1['H'], pt1['mu_rel'],
                   xerr=pt1['sH'], yerr=pt1['s_mu_rel'],
                   fmt='s', color=C_MU, mfc='white', markersize=5,
-                  ecolor=C_MU, elinewidth=0.9, capsize=2.5, label=r'$\mu_r$  data')
+                  ecolor=C_MU, elinewidth=0.9, capsize=2.5, label=r'$\mu_{\mathrm{r}}$  data')
     axMu.axvline(pt1.loc[peak_idx, 'H'], color=C_MU,
-                 linestyle=':', linewidth=1.0, alpha=0.75, label=r'$\mu_r$ peak')
-    axMu.set_ylabel(r'$\mu_r = \mu / \mu_0$', color=C_MU)
+                 linestyle=':', linewidth=1.0, alpha=0.75, label=r'$\mu_{\mathrm{r}}$ peak')
+    axMu.set_ylabel(r'$\mu_{\mathrm{r}} = \mu / \mu_0$', color=C_MU)
     axMu.tick_params(axis='y', colors=C_MU)
     axMu.spines['right'].set_color(C_MU)
     axMu.grid(False)
 
-    axB.set_title('Initial magnetization curve and relative permeability — iron toroid')
+    axB.set_title('Peak-envelope magnetization curve and relative permeability — iron toroid')
 
     h1, l1 = axB.get_legend_handles_labels()
     h2, l2 = axMu.get_legend_handles_labels()
@@ -629,6 +633,51 @@ def _(MU0_THEO, RUNS, fits, mo, np):
     $A$ as a secondary candidate. $R_x$, $R_y$, $C$, and $N$ are
     individually too tightly constrained to be primary suspects.
     """)
+    return
+
+
+@app.cell
+def _(FIG_DIR, MU0_THEO, RUNS, fits, np, plt):
+    _sensitivities = {
+        "N": -2.0,
+        "A": -1.0,
+        r"$R_x$": +1.0,
+        r"$R_y$": +1.0,
+        "C": +1.0,
+        r"$L'$": +1.0,
+    }
+    _quantities = list(_sensitivities.keys())
+    _y = np.arange(len(_quantities), dtype=float)
+    _height = 0.34
+
+    _fig_mu0, _ax_mu0 = plt.subplots(figsize=(8.2, 4.8), constrained_layout=True)
+    _offsets = np.linspace(-_height / 2, _height / 2, len(fits))
+    for _offset, (_sheet, _fit) in zip(_offsets, fits.items()):
+        _ratio = _fit["mu0_exp"].value / MU0_THEO
+        _needed = (1.0 / _ratio) - 1.0
+        _shifts = [100.0 * _needed / _sensitivities[_q] for _q in _quantities]
+        _ax_mu0.barh(
+            _y + _offset,
+            _shifts,
+            height=_height,
+            color=RUNS[_sheet]["color"],
+            alpha=0.80,
+            label=RUNS[_sheet]["label"],
+        )
+
+    _ax_mu0.axvline(0, color="0.25", linewidth=0.8)
+    _ax_mu0.set_yticks(_y, _quantities)
+    _ax_mu0.invert_yaxis()
+    _ax_mu0.set_xlabel(r"required coherent shift in apparatus constant (\%)")
+    _ax_mu0.set_title(r"Systematic sensitivity of the copper-gap $\mu_0$ result")
+    _ax_mu0.grid(True, axis="x", which="major", alpha=0.25)
+    _ax_mu0.minorticks_on()
+    _ax_mu0.grid(True, axis="x", which="minor", alpha=0.10)
+    _ax_mu0.legend(loc="lower right", fontsize=8)
+
+    _fig_mu0.savefig(FIG_DIR / "fig_mu0_sensitivity.pdf", bbox_inches="tight")
+    _fig_mu0.savefig(FIG_DIR / "fig_mu0_sensitivity.png", bbox_inches="tight", dpi=600)
+    _fig_mu0
     return
 
 
