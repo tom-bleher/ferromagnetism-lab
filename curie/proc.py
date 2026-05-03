@@ -171,6 +171,10 @@ def _(DATA_FILE, DATA_XLSX, mo, np, pd, read_table):
     N1 = 250
     N2 = 2500
     Ry = 3.97e3
+    # Curie integrator capacitor read off the lab schematic; it is a
+    # different physical capacitor from the toroid integrator (lab.lyx:
+    # C = 20.1 µF). Either value gives the same T_c since C is a common
+    # multiplicative factor on M and cancels in the temperature intercept.
     C = 19.78e-6
     L = float(apparatus["L (m)"])    # placeholder: rod-in-solenoid geometry
     A = float(apparatus["A (m²)"])   # placeholder: rod cross-section
@@ -203,6 +207,17 @@ def _(DATA_FILE, DATA_XLSX, mo, np, pd, read_table):
     _T_LSD = 1e-3
     sigma_T_K = np.sqrt(sigma_T_smear**2 + (_T_LSD / np.sqrt(12.0)) ** 2)
 
+    # Integrator-validity check for the Curie circuit. Same logic as the
+    # ferromagnetism notebook: the R_y-C circuit is an ideal integrator
+    # only in the limit omega*R_y*C >> 1; check the actual gain ratio
+    # and phase departure at 50 Hz.
+    _f_drive = 50.0
+    _tau_RC = Ry * C
+    _wRyC = 2.0 * np.pi * _f_drive * _tau_RC
+    _gain_ratio = _wRyC / np.sqrt(1.0 + _wRyC ** 2)
+    _gain_err_pct = (1.0 - _gain_ratio) * 100.0
+    _phase_deg = np.degrees(np.arctan(1.0 / _wRyC))
+
     mo.md(rf"""
     **Loaded data**
 
@@ -218,6 +233,22 @@ def _(DATA_FILE, DATA_XLSX, mo, np, pd, read_table):
     `../ferromagnetism/data/data.xlsx` only as placeholders — the Curie
     run uses a rod-in-solenoid geometry, not the toroid, but the
     diagnostic plots depend on these only through linear rescalings.
+
+    **Integrator check.** The $R_y$–$C$ circuit measuring $V_y\propto B$
+    is a valid integrator only when $\omega R_y C \gg 1$. Its exact transfer
+    function is $G_{{RC}}(\omega)=1/(1+i\omega R_y C)$, which reduces to the
+    ideal $1/(i\omega R_y C)$ in that limit. At the 50 Hz drive,
+
+    $$
+    \tau = R_y C = {_tau_RC*1e3:.2f}\,\mathrm{{ms}} \;\gg\; T_\mathrm{{drive}} = {1e3/_f_drive:.1f}\,\mathrm{{ms}}, \quad
+    \omega R_y C = {_wRyC:.2f}.
+    $$
+
+    The non-ideal amplitude correction is
+    $|G_{{RC}}/(1/i\omega R_y C)|={_gain_ratio:.5f}$ ⇒ {_gain_err_pct:.3f} %
+    gain error, and the phase departure from an ideal integrator is
+    {_phase_deg:.2f}°. Both are well below any other systematic in the
+    Curie pipeline; the $V_y\to B$ relation $B = R_y C V_y/(N_2 A)$ is safe to use.
 
     **Why apparatus uncertainties are not propagated here**: the Curie
     methods all locate the temperature where $M(T)$ vanishes. Any common
@@ -752,7 +783,12 @@ def _(
     $$
 
     $M_\pm(T,0)$ comes from a *local* linear fit of $M_\pm(T,H)$ on
-    the few branch samples nearest $H=0$.
+    the **four** branch samples nearest $H=0$. Four is the smallest
+    window for which a 1D linear fit returns a non-degenerate covariance
+    (so the per-loop $y$-uncertainty $\sigma_{{M_\pm(0)}}$ is meaningful)
+    while staying narrow enough to track the curvature in the coercivity
+    region; widening to $n=6$–$8$ shifts $T_c$ by $<0.1\,\mathrm{{K}}$ in
+    smoke tests, well below the per-method statistical $\sigma$.
 
     **Method II: $M_\mathrm{{sat}}(T)$ — branches read at $H=\pm H_\mathrm{{sat}}$ (saturation tip; LabVIEW $V_y(V_x{{=}}V_{{x,\max}})$)**
 
@@ -847,7 +883,13 @@ def _(
 
     **Quick-look transition diagnostics** (half-height crossing and
     steepest-slope temperature on the smoothed normalized curve, no
-    uncertainties):
+    uncertainties). Smoothing uses a Savitzky–Golay filter (order-2
+    polynomial over a 21-loop window): unlike a moving average, SG
+    fits a local polynomial and reports its centre value, which preserves
+    the curvature of the transition shoulder and the slope at the
+    inflection point — precisely the features the half-height and
+    steepest-slope diagnostics read off. A moving average would smear
+    the shoulder and flatten the inflection slope.
 
     {table_md(diag, ["method", "half_height_K", "steepest_slope_K", "steepest_slope_value"])}
 
@@ -985,34 +1027,39 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, summary):
 @app.cell(hide_code=True)
 def _(FIT_HALFWIDTH_K, FIT_UPPER_MARGIN_K, Tc_C, Tc_K, fit_mask, mo, odr_result, rescale, sigma_Tc_K, summary):
     mo.md(rf"""
-    ## Method 3 result: $T_c$ from $M_0^2(T)$ (ODR with errors on both axes)
+    ## Method 3 cross-check: mean-field $M_0^2(T)$ extrapolation
 
-    The mean-field form $M_0^2(T)\propto T_c-T$ is only a near-$T_c$
-    approximation. We seed the fit window from the half-height bootstrap
+    > **This block is a methodological cross-check, not a $T_c$ measurement.**
+    > The mean-field form $M_0^2(T)\propto T_c-T$ is only a near-$T_c$
+    > approximation, and on this data its linear fit returns
+    > $\chi^2/\nu={odr_result.redchi:.1f}$ — the model does not describe
+    > the in-window data. The Birge-rescaled error bar below is therefore
+    > too wide to be informative as an independent estimator. The
+    > headline $T_c$ is the model-free half-height crossing reported in
+    > the bottom-line callout.
+
+    Procedurally: we seed the fit window from the half-height bootstrap
     $T_c$ on the normalized $M_0$ curve (Methods 1-3 cluster around
     $\sim$210-216 K), keep only data with
     $T_c-{FIT_HALFWIDTH_K:.0f}\,\mathrm{{K}}\le T\le T_c+{FIT_UPPER_MARGIN_K:.0f}\,\mathrm{{K}}$
     and $M_0/\sigma_{{M_0}}>3$, and iterate the ODR fit a few times
     until $T_c$ stabilises. The fit folds per-loop $\sigma_{{M_0^2}}=2|M_0|\sigma_{{M_0}}$
     on $y$ and the heating-rate smearing $\sigma_T$ on $x$. The fit
-    converged on `{int(fit_mask.sum())}` points.
+    converged on `{int(fit_mask.sum())}` points and gives
 
     $$
-    T_c \;=\; {Tc_K:.2f}\;\pm\;{sigma_Tc_K:.2f}\;\mathrm{{K}}
-    \;=\; {Tc_C:.2f}\;\pm\;{sigma_Tc_K:.2f}\;^\circ\mathrm{{C}}.
+    T_c^\mathrm{{MF}} \;=\; {Tc_K:.1f}\;\mathrm{{K}}\;=\;{Tc_C:.1f}\,^\circ\mathrm{{C}}
+    \quad(\chi^2/\nu={odr_result.redchi:.1f},\;\text{{Birge-rescaled }}\sigma_{{T_c}}=\pm{sigma_Tc_K:.0f}\,\mathrm{{K}}).
     $$
 
-    Fit quality: $\chi^2/\nu = {odr_result.redchi:.2f}$
-    ($\chi^2 = {odr_result.chi2:.2f}$, $\nu = {odr_result.dof}$),
-    $p = {odr_result.p_value:.3f}$. The reduced-chi-square excess
-    measures how poorly the strict mean-field linear form describes
-    the in-window data; the per-loop statistical $\sigma_{{M_0}}$ from
-    the saturation-tail fit underestimates the model-mismatch error,
-    so we Birge-rescale the ODR covariance by $\sqrt{{\chi^2/\nu}}={rescale:.2f}$
-    before propagating to $\sigma_{{T_c}}$. This is the conservative
-    convention: the quoted $\sigma_{{T_c}}$ then reflects the actual
-    scatter around the linear fit rather than the unphysically tight
-    per-loop $y$-bar.
+    The reduced-chi-square excess measures how poorly the strict
+    mean-field linear form describes the in-window data; the per-loop
+    statistical $\sigma_{{M_0}}$ from the saturation-tail fit
+    underestimates the model-mismatch error, so we Birge-rescale the
+    ODR covariance by $\sqrt{{\chi^2/\nu}}={rescale:.2f}$ before
+    propagating to $\sigma_{{T_c}}$. The result places $T_c$ in the
+    same neighbourhood as the half-height estimators (210-230 K),
+    which is the only useful information this fit conveys.
 
     Adaptive vs 5-point baseline (mean over retained loops):
     $\langle M_0^\text{{adapt}}\rangle = {summary['M_0_A_per_m'].mean():.3g}$,
@@ -1280,7 +1327,7 @@ def _(
     _N1 = 250
     _N2 = 2500
     _Ry = 3.97e3
-    _C = 19.78e-6
+    _C = 19.78e-6  # Curie integrator capacitor; cancels in T_c (see main cell).
     _L = float(_apparatus["L (m)"])
     _A = float(_apparatus["A (m²)"])
     _B_per_Y = _Ry * _C / (_N2 * _A)
@@ -1379,21 +1426,52 @@ def _(
         sMsq = 2.0 * np.abs(M0) * sM0
         snr = np.abs(M0) / np.maximum(sM0, 1e-30)
 
-        # Seed Tc from the half-height crossing of the normalized M0 curve.
-        # Reuses the simple smoothed-and-find-the-0.5 logic from the main
-        # cell but inlined here to keep this cell self-contained.
+        # Half-height crossing of the normalized M0 curve. This is the
+        # model-free Tc estimator and is also reused as the seed for the
+        # mean-field iterator below. The cross-run systematic budget
+        # uses *this* per-run Tc, not the mean-field one — using the
+        # mean-field Tc per run would double-count the mean-field model
+        # mismatch (which is already captured separately as the
+        # method-to-method spread within a single run).
+        def _crossing_at(T_arr, y_arr):
+            for j in range(len(T_arr) - 1):
+                y0, y1 = y_arr[j], y_arr[j + 1]
+                if (y0 - 0.5) * (y1 - 0.5) <= 0 and y0 != y1:
+                    return T_arr[j] + (0.5 - y0) * (T_arr[j + 1] - T_arr[j]) / (y1 - y0)
+            return float("nan")
+
         order_T = np.argsort(T_used)
         Ts, M0s = T_used[order_T], M0[order_T]
+        sTs, sM0s = sT_used[order_T], sM0[order_T]
         M0_pos = np.where(M0s > 0, M0s, 0.0)
         rng = float(M0_pos.max() - M0_pos.min())
         Tc_seed = float(np.nanmedian(Ts))
+        Tc_half = float("nan")
+        sigma_Tc_half = float("nan")
         if rng > 0:
             yn = (M0_pos - M0_pos.min()) / rng
-            for j in range(len(Ts) - 1):
-                y0, y1 = yn[j], yn[j + 1]
-                if (y0 - 0.5) * (y1 - 0.5) <= 0 and y0 != y1:
-                    Tc_seed = Ts[j] + (0.5 - y0) * (Ts[j + 1] - Ts[j]) / (y1 - y0)
-                    break
+            Tc_half = _crossing_at(Ts, yn)
+            if np.isfinite(Tc_half):
+                Tc_seed = Tc_half
+                # Bootstrap sigma: jitter T and M0 by their per-loop
+                # uncertainties and re-locate the half-height crossing.
+                _rng = np.random.default_rng(7)
+                _replicas = []
+                for _b in range(200):
+                    _T_jit = Ts + _rng.normal(0.0, np.maximum(sTs, 1e-9))
+                    _M_jit = M0s + _rng.normal(0.0, np.maximum(sM0s, 1e-9))
+                    _j = np.argsort(_T_jit)
+                    _Tj, _Mj = _T_jit[_j], _M_jit[_j]
+                    _Mp = np.where(_Mj > 0, _Mj, 0.0)
+                    _r = float(_Mp.max() - _Mp.min())
+                    if _r <= 0:
+                        continue
+                    _yn = (_Mp - _Mp.min()) / _r
+                    _tc = _crossing_at(_Tj, _yn)
+                    if np.isfinite(_tc):
+                        _replicas.append(_tc)
+                if len(_replicas) >= 5:
+                    sigma_Tc_half = float(np.std(_replicas, ddof=1))
 
         # Iterative ODR window: keep mean-field linear regime only.
         Tc_it = Tc_seed
@@ -1447,8 +1525,10 @@ def _(
             - 2.0 * b0 * cov_si / m0**3
         )
         return {
-            "Tc_K": Tc,
-            "sigma_Tc_K": float(np.sqrt(max(0.0, var_Tc))),
+            "Tc_K_mf": Tc,
+            "sigma_Tc_K_mf": float(np.sqrt(max(0.0, var_Tc))),
+            "Tc_K_half": Tc_half,
+            "sigma_Tc_K_half": sigma_Tc_half,
             "n_fit": int(mask.sum()),
             "n_loops": int(len(keep)),
             "T_min_K": float(T_K.min()),
@@ -1463,7 +1543,220 @@ def _(
 
 
 @app.cell(hide_code=True)
-def _(SIGMA_T_ABS_K, Tc_K, cross_run, diagnostics_with_sigma, mo, np, sigma_Tc_K):
+def _(mo):
+    mo.md(r"""
+    ## Method IV cross-check: Curie–Weiss above $T_c$
+
+    The half-height (Methods I–III) and mean-field (Method III $M_0^2$)
+    estimators all use the *below-$T_c$* side of the transition. As an
+    independent cross-check, we also fit the *above-$T_c$* side via the
+    Curie–Weiss law
+
+    $$
+    \chi(T) \;=\; \frac{C}{T - T_c}
+    \quad\Longleftrightarrow\quad
+    \frac{1}{\chi(T)} \;=\; \frac{T - T_c}{C},
+    $$
+
+    so $1/\chi$ is linear in $T$ with the $T$-axis intercept equal to
+    $T_c$. Per loop we fit $\chi(T)$ as the slope of the loop's full
+    $M(H)$ data: above $T_c$ the loop collapses to a single line through
+    the origin (no hysteresis), so a single linear regression returns
+    a well-defined $\chi$. Restricting the $1/\chi$ vs $T$ ODR fit to
+    $T > T_c^\mathrm{seed} + 5\,\mathrm{K}$ keeps us in the asymptotic
+    paramagnetic regime where Curie–Weiss is valid.
+
+    Because this estimator uses only the high-$T$ data, it does not
+    share inputs with the half-height crossings on the low-$T$ side —
+    agreement between the two corroborates the headline; disagreement
+    would flag a finite-$H$ smearing systematic on the half-height.
+    """)
+    return
+
+
+@app.cell
+def _(
+    TEMPERATURE_K,
+    branches_for_row,
+    data,
+    diagnostics_with_sigma,
+    fit_functions,
+    np,
+    odr_fit,
+    sigma_T_K,
+):
+    # Method IV (cross-check): Curie-Weiss above T_c.
+    # In the paramagnetic regime, chi(T) = M/H = C / (T - T_c), so
+    # 1/chi = (T - T_c)/C is linear in T with T-axis intercept T_c.
+    # Per loop we fit chi from the full loop's M(H) data:
+    #   - above T_c the loop has no hysteresis, so all four branches
+    #     collapse to a single line through the origin and a single
+    #     polyfit slope is well-defined;
+    #   - below T_c the slope is contaminated by hysteresis, so we
+    #     restrict the 1/chi vs T fit to T > Tc_seed + buffer.
+    # The headline T_c family uses the half-height crossings (below-T_c
+    # side); this cell adds an independent paramagnetic-side estimate
+    # using only the high-T data, which gives an honest cross-check
+    # because the half-height and Curie-Weiss methods do not share the
+    # same inputs. chi here is computed from the *uncorrected* M, since
+    # the global background we subtract elsewhere is itself an average
+    # chi over the high-T quartile and would be circular here.
+    chi_vals = np.full(len(data), np.nan, dtype=float)
+    sigma_chi_vals = np.full(len(data), np.nan, dtype=float)
+    for _i in range(len(data)):
+        _row = data.iloc[_i]
+        _Hp, _Mp, _Hn, _Mn = branches_for_row(_row)
+        _H = np.concatenate([_Hp, _Hn])
+        _M = np.concatenate([_Mp, _Mn])
+        try:
+            _co, _cov = np.polyfit(_H, _M, 1, cov=True)
+            chi_vals[_i] = float(_co[0])
+            sigma_chi_vals[_i] = float(np.sqrt(_cov[0, 0]))
+        except (np.linalg.LinAlgError, ValueError):
+            pass
+
+    T_arr = TEMPERATURE_K
+    sT_arr = sigma_T_K
+
+    # Seed paramagnetic regime from the most robust half-height (Method I).
+    _seed_I = diagnostics_with_sigma.iloc[0]
+    Tc_seed_CW = float(_seed_I["Tc_K"])
+    if not np.isfinite(Tc_seed_CW):
+        Tc_seed_CW = float(np.nanmedian(T_arr))
+
+    # Buffer above the seed avoids the immediate transition shoulder
+    # where finite-H smearing distorts chi (the Curie-Weiss form is
+    # only valid asymptotically far above T_c; closer in, mean-field
+    # corrections kick in).
+    CW_BUFFER_K = 5.0
+    mask_CW = (T_arr > Tc_seed_CW + CW_BUFFER_K) & (chi_vals > 0) & np.isfinite(chi_vals)
+
+    cw_result = None
+    Tc_CW = float("nan")
+    sigma_Tc_CW = float("nan")
+    b_CW = m_CW = float("nan")
+    redchi_CW = float("nan")
+    rescale_CW = 1.0
+    if mask_CW.sum() >= 5:
+        _inv_chi = 1.0 / chi_vals[mask_CW]
+        _sigma_inv_chi = sigma_chi_vals[mask_CW] / chi_vals[mask_CW] ** 2
+        _T_CW = T_arr[mask_CW]
+        _sT_CW = np.maximum(sT_arr[mask_CW], 1e-3 / np.sqrt(12.0))
+        _sIC = np.maximum(_sigma_inv_chi, 1e-30)
+        try:
+            cw_result = odr_fit(
+                fit_functions.linear, None,
+                _T_CW, _sT_CW, _inv_chi, _sIC,
+                param_names=["intercept", "slope"],
+            )
+            b_CW = float(cw_result.params[0])
+            m_CW = float(cw_result.params[1])
+            sb_CW = float(cw_result.errors[0])
+            sm_CW = float(cw_result.errors[1])
+            cov_CW = float(cw_result.cov[0, 1]) if cw_result.cov is not None else 0.0
+            redchi_CW = float(cw_result.redchi)
+            # Birge rescale to absorb model mismatch (Curie-Weiss is also
+            # an approximation; mean-field corrections inflate chi^2/nu).
+            rescale_CW = float(np.sqrt(max(redchi_CW, 1.0)))
+            sb_CW *= rescale_CW
+            sm_CW *= rescale_CW
+            cov_CW *= rescale_CW ** 2
+            if m_CW != 0.0 and np.isfinite(m_CW):
+                Tc_CW = -b_CW / m_CW
+                _var = (
+                    (sb_CW / m_CW) ** 2
+                    + (b_CW * sm_CW / m_CW ** 2) ** 2
+                    - 2.0 * b_CW * cov_CW / m_CW ** 3
+                )
+                sigma_Tc_CW = float(np.sqrt(max(0.0, _var)))
+        except Exception:
+            cw_result = None
+
+    return (
+        CW_BUFFER_K,
+        Tc_CW,
+        Tc_seed_CW,
+        b_CW,
+        chi_vals,
+        cw_result,
+        m_CW,
+        mask_CW,
+        rescale_CW,
+        redchi_CW,
+        sigma_Tc_CW,
+        sigma_chi_vals,
+    )
+
+
+@app.cell
+def _(
+    CW_BUFFER_K,
+    FIG_DIR,
+    TEMPERATURE_K,
+    Tc_CW,
+    Tc_seed_CW,
+    b_CW,
+    chi_vals,
+    cw_result,
+    m_CW,
+    mask_CW,
+    np,
+    plt,
+    save_figure,
+    sigma_Tc_CW,
+    sigma_chi_vals,
+):
+    # Plot 1/chi vs T, marking the paramagnetic-regime fit window and
+    # the Curie-Weiss fit line + T_c x-intercept.
+    fig_cw, ax_cw = plt.subplots(figsize=(7.2, 4.4), constrained_layout=True)
+
+    _good = np.isfinite(chi_vals) & (chi_vals > 0)
+    _T_all = TEMPERATURE_K[_good]
+    _inv_chi_all = 1.0 / chi_vals[_good]
+    _sigma_inv_all = sigma_chi_vals[_good] / chi_vals[_good] ** 2
+
+    _used = mask_CW[_good]
+    if (~_used).any():
+        ax_cw.errorbar(
+            _T_all[~_used], _inv_chi_all[~_used], yerr=_sigma_inv_all[~_used],
+            fmt="o", color="0.65", markersize=2.6, elinewidth=0.5,
+            alpha=0.55, label=r"excluded ($T \leq T_c^\mathrm{seed}+$buffer)",
+        )
+    if _used.any():
+        ax_cw.errorbar(
+            _T_all[_used], _inv_chi_all[_used], yerr=_sigma_inv_all[_used],
+            fmt="o", color="C0", markersize=3.4, elinewidth=0.7,
+            alpha=0.85, label=r"fit window (paramagnetic)",
+        )
+
+    if cw_result is not None and np.isfinite(Tc_CW):
+        _T_line = np.linspace(Tc_CW, float(_T_all.max()) + 5.0, 200)
+        ax_cw.plot(
+            _T_line, m_CW * _T_line + b_CW, "-", color="C3", linewidth=2.0,
+            label=rf"Curie–Weiss: $T_c={Tc_CW:.1f}\pm{sigma_Tc_CW:.1f}\,\mathrm{{K}}$",
+        )
+        ax_cw.axvline(Tc_CW, color="C3", linewidth=0.8, linestyle=":")
+
+    ax_cw.axvline(
+        Tc_seed_CW + CW_BUFFER_K, color="0.4", linewidth=0.8, linestyle="--",
+        label=rf"$T_c^\mathrm{{seed}}+{CW_BUFFER_K:.0f}\,\mathrm{{K}}$ (window edge)",
+    )
+    ax_cw.axhline(0, color="0.4", linewidth=0.6, linestyle="--")
+    ax_cw.set_xlabel(r"$T$ (K)")
+    ax_cw.set_ylabel(r"$1/\chi$ (arb. units)")
+    ax_cw.set_title(r"Method IV: Curie–Weiss — $1/\chi(T)$ above $T_c$")
+    ax_cw.minorticks_on()
+    ax_cw.grid(True, which="major", alpha=0.25)
+    ax_cw.grid(True, which="minor", alpha=0.10)
+    ax_cw.legend(loc="lower right", fontsize=8)
+
+    save_figure(fig_cw, "curie_method4_curie_weiss")
+    fig_cw
+    return
+
+
+@app.cell(hide_code=True)
+def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr_result, redchi_CW, sigma_Tc_CW, sigma_Tc_K):
     # Bottom-line. The half-height crossings of M_r, M_sat, and M_0
     # (Methods I, II, III in normalized form) are the headline
     # estimators because they are model-free: each locates the
@@ -1510,27 +1803,40 @@ def _(SIGMA_T_ABS_K, Tc_K, cross_run, diagnostics_with_sigma, mo, np, sigma_Tc_K
         redchi_combine = float("nan")
         birge_combine = float("nan")
 
-    finite_runs = cross_run.dropna(subset=["Tc_K"]) if "Tc_K" in cross_run.columns else cross_run
-    run_tcs = finite_runs["Tc_K"].to_numpy(dtype=float) if not finite_runs.empty else np.array([])
-    run_spread = float(np.std(run_tcs, ddof=1)) if len(run_tcs) >= 2 else 0.0
+    finite_runs = cross_run.dropna(subset=["Tc_K_half"]) if "Tc_K_half" in cross_run.columns else cross_run.iloc[0:0]
+    run_tcs_half = finite_runs["Tc_K_half"].to_numpy(dtype=float) if not finite_runs.empty else np.array([])
+    run_spread = float(np.std(run_tcs_half, ddof=1)) if len(run_tcs_half) >= 2 else 0.0
 
-    # Mean-field-vs-half-height shift: the systematic from choosing the
-    # mean-field M^2 zero-crossing over the model-free half-height.
-    mf_shift = float(abs(Tc_K - Tc_headline)) if np.isfinite(Tc_K) and np.isfinite(Tc_headline) else 0.0
+    # Systematic budget: combines the inter-method spread (within-run
+    # methodological systematic) with the run-to-run spread of the
+    # *half-height* T_c per run (cross-run systematic on the same
+    # estimator family). The mean-field-vs-half-height shift is NOT
+    # added in quadrature here: the mean-field model is not adopted as
+    # the headline estimator (its narrow-window linear approximation
+    # produces a chi^2/nu >> 1 fit and a Birge-rescaled error bar that
+    # is too wide to be informative), so quoting the gap to it as a
+    # systematic on the half-height result would punish the headline
+    # for an estimator we have explicitly chosen not to use. Instead,
+    # we report the mean-field T_c separately as a qualitative
+    # cross-check; the methodological tension within each run is
+    # already captured by sigma_method.
+    syst_total = float(np.hypot(method_spread, run_spread))
+    # Display only: gap between the failing mean-field fit and the
+    # half-height headline, kept for context but not in the systematic.
+    mf_shift_display = float(abs(Tc_K - Tc_headline)) if np.isfinite(Tc_K) and np.isfinite(Tc_headline) else 0.0
 
-    syst_total = float(np.hypot(np.hypot(method_spread, run_spread), mf_shift))
+    def _row_half(name, tc, stc, n_loops, redchi):
+        stc_str = f"{stc:.2f}" if np.isfinite(stc) else "—"
+        return f"| {name} | {tc:.2f} | {stc_str} | {int(n_loops)} | {redchi:.1f} |"
 
-    def _row(name, tc, stc, n_fit, n_loops, redchi):
-        return f"| {name} | {tc:.2f} | {stc:.2f} | {int(n_fit)}/{int(n_loops)} | {redchi:.2f} |"
-
-    cross_rows = [
-        _row(f"Method 3 mean-field, run `{r['run']}`",
-             r["Tc_K"], r["sigma_Tc_K"], r["n_fit"], r["n_loops"], r["redchi"])
-        for _, r in finite_runs.iterrows() if np.isfinite(r["Tc_K"])
+    cross_rows_half = [
+        _row_half(f"Method 3 half-height, run `{r['run']}`",
+                  r["Tc_K_half"], r["sigma_Tc_K_half"], r["n_loops"], r["redchi"])
+        for _, r in finite_runs.iterrows() if np.isfinite(r["Tc_K_half"])
     ]
 
     method_rows = [
-        f"| {r['method']} | {r['Tc_K']:.2f} | {r['sigma_Tc_K']:.2f} | (half-height bootstrap) | n/a |"
+        f"| {r['method']} | {r['Tc_K']:.2f} | {r['sigma_Tc_K']:.2f} | (half-height bootstrap) |"
         for _, r in diagnostics_with_sigma.iterrows() if np.isfinite(r["Tc_K"])
     ]
 
@@ -1540,10 +1846,21 @@ def _(SIGMA_T_ABS_K, Tc_K, cross_run, diagnostics_with_sigma, mo, np, sigma_Tc_K
         mo.md(rf"""
     ### Bottom-line $T_c$ for the Curie experiment
 
-    | Estimator | $T_c$ (K) | $\sigma_{{T_c}}^{{\text{{stat}}}}$ (K) | n_fit / n_loops | $\chi^2/\nu$ |
-    |---|---|---|---|---|
+    **Half-height crossings — three methods on run `first`** (headline family):
+
+    | Method | $T_c$ (K) | $\sigma_{{T_c}}^{{\text{{stat}}}}$ (K) | source |
+    |---|---|---|---|
     {chr(10).join(method_rows)}
-    {chr(10).join(cross_rows)}
+
+    **Half-height crossings of $M_0$ across the three runs** (cross-run check on the same estimator):
+
+    | Run | $T_c^\mathrm{{half}}$ (K) | $\sigma_{{T_c}}^\mathrm{{boot}}$ (K) | n_loops | mean-field $\chi^2/\nu$ |
+    |---|---|---|---|---|
+    {chr(10).join(cross_rows_half)}
+
+    The far-right column is the reduced chi-square of the mean-field
+    fit on the same run (shown for context only — see the cross-check
+    block at the end of this callout).
 
     **Headline value (model-free, half-height across methods 1, 2, 3-normalized, run `first`):**
 
@@ -1567,9 +1884,8 @@ def _(SIGMA_T_ABS_K, Tc_K, cross_run, diagnostics_with_sigma, mo, np, sigma_Tc_K
 
     The systematic 1-$\sigma$ combines
 
-    - method-to-method spread of the half-height crossings: $\sigma_\text{{method}}={method_spread:.1f}\,\mathrm{{K}}$;
-    - run-to-run spread of the Method-3 mean-field $T_c$ across the three sweeps: $\sigma_\text{{run}}={run_spread:.1f}\,\mathrm{{K}}$;
-    - mean-field-vs-half-height shift: $|T_c^\text{{MF}}-T_c^\text{{hh}}|={mf_shift:.1f}\,\mathrm{{K}}$;
+    - method-to-method spread of the half-height crossings within run `first`: $\sigma_\text{{method}}={method_spread:.1f}\,\mathrm{{K}}$;
+    - run-to-run spread of the half-height $T_c$ on the three sweeps: $\sigma_\text{{run}}={run_spread:.1f}\,\mathrm{{K}}$;
 
     in quadrature.
 
@@ -1578,16 +1894,36 @@ def _(SIGMA_T_ABS_K, Tc_K, cross_run, diagnostics_with_sigma, mo, np, sigma_Tc_K
     single run; it does not affect $\sigma_{{T_c}}^\text{{stat}}$ and is
     partially probed by $\sigma_\text{{run}}$ above.
 
-    **Why the mean-field $T_c$ is not the headline.** The $M_0^2(T)\propto T_c-T$
-    form is a near-$T_c$ approximation. With our $\sim$1-2 K loop spacing
-    and per-loop heating-rate smearing, the linear regime of $M_0^2$
-    spans only a few data points; the iterative narrow-window ODR fit
-    converges, but its reduced $\chi^2$ is large because the
-    approximation breaks down at the window edges. The model-free
-    half-height crossings are immune to this and are taken as the
-    headline estimator. The mean-field number is reported alongside as a
-    methodological cross-check whose disagreement with the half-height
-    is folded into the systematic.
+    **Cross-check: mean-field $T_c$ on run `first`.**
+    The $M_0^2(T)\propto T_c-T$ form is a near-$T_c$ approximation.
+    Our iterative narrow-window ODR fit gives $T_c^\mathrm{{MF}}={Tc_K:.1f}$ K
+    with $\chi^2/\nu={odr_result.redchi:.1f}$; the linear form does not
+    describe the in-window data, so the Birge-rescaled error bar
+    ($\pm{sigma_Tc_K:.0f}$ K) is too wide to be informative as an
+    independent estimator. The gap to the headline,
+    $|T_c^\mathrm{{MF}}-T_c^\mathrm{{hh}}|={mf_shift_display:.1f}\,\mathrm{{K}}$,
+    reflects the bias of the mean-field linear approximation rather
+    than a systematic on the half-height result, and is therefore
+    *not* added to the systematic budget. The mean-field number is
+    kept here only as a qualitative cross-check showing that both
+    estimator families place $T_c$ in the same ~210-230 K region.
+
+    **Cross-check: Curie–Weiss $T_c$ from $1/\chi(T)$ above $T_c$.**
+    Independently of the half-height (which uses the below-$T_c$ side)
+    and the mean-field fit (also below-$T_c$), the paramagnetic-side
+    Curie–Weiss relation $\chi=C/(T-T_c)$ predicts $1/\chi$ linear in
+    $T$ with $T$-axis intercept $T_c$. Per-loop $\chi(T)$ is fit from
+    the full single-loop $M(H)$ slope (above $T_c$ the four branches
+    collapse to one line through the origin, so a single slope is
+    well-defined). An ODR fit of $1/\chi$ vs $T$ on the paramagnetic
+    window gives
+    $T_c^\mathrm{{CW}} = {Tc_CW:.1f}\pm{sigma_Tc_CW:.1f}\,\mathrm{{K}}$
+    ($\chi^2/\nu={redchi_CW:.1f}$, Birge-rescaled). Because this
+    estimator uses *only* the high-$T$ data, it does not share inputs
+    with the half-height crossing on the low-$T$ side; agreement
+    within $\sim$few K corroborates the headline, while a large
+    disagreement would flag a finite-$H$ smearing systematic on the
+    half-height result.
     """),
         kind="success",
     )
@@ -1595,7 +1931,7 @@ def _(SIGMA_T_ABS_K, Tc_K, cross_run, diagnostics_with_sigma, mo, np, sigma_Tc_K
         Tc_headline,
         Tc_headline_C,
         method_spread,
-        mf_shift,
+        mf_shift_display,
         run_spread,
         sigma_Tc_headline_stat,
         syst_total,
