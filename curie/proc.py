@@ -2133,17 +2133,13 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, meanfield_f
         Tc_headline = float(np.average(hh_tcs, weights=_w))
         sigma_Tc_headline_stat_unrescaled = float(1.0 / np.sqrt(np.sum(_w)))
         method_spread = float(np.std(hh_tcs, ddof=1)) if len(hh_tcs) >= 2 else 0.0
-        # Birge rescaling on the combine. The three half-height methods
-        # disagree by ~7 K while their per-method bootstrap sigmas are
-        # ~0.2-0.3 K, so the inverse-variance combine of independent
-        # estimators is overconfident: chi^2/nu = sum((Tc_i - Tc_avg)^2
-        # / sigma_i^2) / (N-1) is ~100. We multiply the combined sigma
-        # by sqrt(max(chi^2/nu, 1)) to absorb the disagreement into
-        # the *statistical* error bar, which is the standard PDG-style
-        # treatment when methods that should agree don't. The leftover
-        # method-to-method scatter still appears as sigma_method in
-        # the systematic budget below; callers who want the unrescaled
-        # statistical sigma can read sigma_Tc_headline_stat_unrescaled.
+        # The three half-height methods disagree by far more than their
+        # bootstrap sigmas. That is a methodological spread, not additional
+        # counting/statistical noise, so keep the inverse-variance statistical
+        # sigma uninflated and put the method spread in the systematic budget
+        # below. The chi^2/nu and Birge factor are kept only as diagnostics;
+        # applying the Birge factor here and also adding method_spread as a
+        # systematic would double-count the same disagreement.
         if len(hh_tcs) >= 2:
             chi2_combine = float(np.sum((hh_tcs - Tc_headline) ** 2 * _w))
             dof_combine = len(hh_tcs) - 1
@@ -2151,7 +2147,7 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, meanfield_f
         else:
             redchi_combine = 1.0
         birge_combine = float(np.sqrt(max(redchi_combine, 1.0)))
-        sigma_Tc_headline_stat = sigma_Tc_headline_stat_unrescaled * birge_combine
+        sigma_Tc_headline_stat = sigma_Tc_headline_stat_unrescaled
     else:
         Tc_headline = float("nan")
         sigma_Tc_headline_stat_unrescaled = float("nan")
@@ -2171,12 +2167,13 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, meanfield_f
     run_spread = float(np.std(run_tcs_half_preferred, ddof=1)) if len(run_tcs_half_preferred) >= 2 else run_spread_all
 
     # Systematic budget: combines the inter-method spread (within-run
-    # methodological systematic) with the run-to-run spread of the
-    # *half-height* T_c per run (cross-run systematic on the same
-    # estimator family). The low-drive third run is kept in the table but
-    # not in the preferred run-spread term because Method III assumes a
-    # saturated tail; the low drive makes that assumption visibly weaker.
-    # The all-run spread is still reported as a conservative alternative.
+    # methodological systematic), the run-to-run spread of the *half-height*
+    # T_c per run (cross-run systematic on the same estimator family), and
+    # the fully-correlated thermometer absolute-accuracy term. The low-drive
+    # third run is kept in the table but not in the preferred run-spread term
+    # because Method III assumes a saturated tail; the low drive makes that
+    # assumption visibly weaker. The all-run spread is still reported as a
+    # conservative alternative.
     # The mean-field-vs-half-height shift is NOT
     # added in quadrature here: the mean-field model is not adopted as
     # the headline estimator (its narrow-window linear approximation
@@ -2187,7 +2184,7 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, meanfield_f
     # we report the mean-field T_c separately as a qualitative
     # cross-check; the methodological tension within each run is
     # already captured by sigma_method.
-    syst_total = float(np.hypot(method_spread, run_spread))
+    syst_total = float(np.hypot(np.hypot(method_spread, run_spread), SIGMA_T_ABS_K))
     # Display only: gap between the failing mean-field fit and the
     # half-height headline, kept for context but not in the systematic.
     mf_shift_display = float(abs(Tc_K - Tc_headline)) if np.isfinite(Tc_K) and np.isfinite(Tc_headline) else 0.0
@@ -2247,29 +2244,26 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, meanfield_f
     \;=\; {Tc_headline_C:.1f}^\circ\mathrm{{C}}.
     $$
 
-    The statistical 1-$\sigma$ on the combined headline has been
-    Birge-rescaled to account for method-to-method disagreement. The
-    raw inverse-variance combine of the three half-height bootstraps
-    gives $\sigma_\text{{stat}}^\text{{raw}}={sigma_Tc_headline_stat_unrescaled:.2f}\,\mathrm{{K}}$,
-    but the three estimates differ by ~7 K — far more than these per-method
+    The statistical 1-$\sigma$ is the inverse-variance combine of the
+    three half-height bootstrap errors: $\sigma_\text{{stat}}={sigma_Tc_headline_stat:.2f}\,\mathrm{{K}}$.
+    The three estimates differ by much more than these per-method
     bootstrap errors allow under the assumption that they sample the
-    same quantity. The combine therefore has $\chi^2/\nu={redchi_combine:.1f}$;
-    we multiply $\sigma_\text{{stat}}$ by $\sqrt{{\chi^2/\nu}}={birge_combine:.1f}$
-    so the quoted statistical bar reflects the actual scatter between
-    methods rather than the unphysically tight per-method bootstrap
-    bands.
+    same quantity ($\chi^2/\nu={redchi_combine:.1f}$; equivalent Birge
+    factor $={birge_combine:.1f}$). That disagreement is therefore
+    assigned to the systematic budget below rather than also inflating
+    the statistical error bar.
 
     The systematic 1-$\sigma$ combines
 
     - method-to-method spread of the half-height crossings within run `first`: $\sigma_\text{{method}}={method_spread:.1f}\,\mathrm{{K}}$;
     - run-to-run spread of the half-height $T_c$ on the preferred high-drive sweeps: $\sigma_\text{{run}}={run_spread:.1f}\,\mathrm{{K}}$;
+    - thermometer absolute-accuracy term: $\sigma_\text{{therm}}={SIGMA_T_ABS_K:.1f}\,\mathrm{{K}}$;
 
     in quadrature.
 
-    A fully-correlated thermometer absolute-accuracy bound of
-    $\pm{SIGMA_T_ABS_K:.1f}\,\mathrm{{K}}$ shifts $T_c$ rigidly within a
-    single run; it does not affect $\sigma_{{T_c}}^\text{{stat}}$ and is
-    partially probed by $\sigma_\text{{run}}$ above.
+    The thermometer term shifts $T_c$ rigidly within a single run, so it
+    does not affect $\sigma_{{T_c}}^\text{{stat}}$; it is carried in the
+    quoted systematic error instead.
 
     **Method V: full self-consistency mean-field fit.**
     The official `magnetfit2` algorithm uses the finite-field tanh equation,

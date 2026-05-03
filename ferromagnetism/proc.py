@@ -152,11 +152,11 @@ def _(mo):
     | $N$ (turns) | $250$ | — | count given |
     | $L$ (Ampère loop) | $0.48\,\mathrm{m}$ | $\frac{2\sqrt{2}\,\mathrm{mm}}{\sqrt{12}} \approx 0.82\,\mathrm{mm}$ $(0.17\%)$ | two ruler measurements for sides $a,b$ (res $1\,\mathrm{mm}$) and indirect $L = 2(a+b)$: $\sigma_L = 2\sqrt{\sigma_a^2 + \sigma_b^2}$ |
     | $L'$ | per measurement | $\frac{0.05\,\mathrm{mm}}{\sqrt{12}} \approx 14.4\,\mu\mathrm{m}$ | caliper (res $0.05\,\mathrm{mm}$) |
-    | $R_x$ (current-sense) | $2.999\,\mathrm{\Omega}$ | $4.3\,\mathrm{m\Omega}$ $(0.14\%)$ | HP 34401A manual, p. 216: 1-year resistance accuracy on 100 Ω range, $0.010\%$ reading + $0.004\%$ range, plus $\mathrm{LSD}/\sqrt{12}$ |
-    | $R_y$ (integrator) | $11.10\,\mathrm{k\Omega}$ | $2.1\,\mathrm{\Omega}$ $(0.019\%)$ | HP 34401A manual, p. 216: 1-year resistance accuracy on 100 kΩ range, $0.010\%$ reading + $0.001\%$ range |
+    | $R_x$ (current-sense) | $2.999\,\mathrm{\Omega}$ | $2.5\,\mathrm{m\Omega}$ $(0.083\%)$ | HP 34401A manual, p. 216: 1-year resistance accuracy on 100 Ω range, $\pm(0.010\%$ reading $+0.004\%$ range$)$ treated as a Type-B rectangular bound, plus $\mathrm{LSD}/\sqrt{12}$ |
+    | $R_y$ (integrator) | $11.10\,\mathrm{k\Omega}$ | $1.2\,\mathrm{\Omega}$ $(0.011\%)$ | HP 34401A manual, p. 216: 1-year resistance accuracy on 100 kΩ range, $\pm(0.010\%$ reading $+0.001\%$ range$)$ treated as a Type-B rectangular bound |
     | $C$ (integrator) | $20.1\,\mu\mathrm{F}$ | $2.0\,\mathrm{nF}$ $(0.01\%)$ | value and uncertainty given |
     | $A$ (core cross-section) | $16.0\,\mathrm{cm^{2}}$ | $A\,\sqrt{2}\,\dfrac{1\,\mathrm{mm}/\sqrt{12}}{40\,\mathrm{mm}} \approx 0.16\,\mathrm{cm^{2}}$ $(1.02\%)$ | two ruler measurements for sides $a,b\approx 4\,\mathrm{cm}$ (res $1\,\mathrm{mm}$) and indirect $A=a\cdot b$: $\sigma_A/A = \sqrt{(\sigma_a/a)^2 + (\sigma_b/b)^2}$ |
-    | $\Delta V_x,\,\Delta V_y$ (scope, dual-cursor) | per measurement | $\sqrt{(0.024\,\lvert V\rvert)^2 + (5\,\mathrm{mV})^2 + (\mathrm{LSD}/\sqrt{12})^2}$ | Agilent 7000A data sheet, p. 18: dual-cursor accuracy $=2.0\%$ vertical gain + $0.4\%$ full scale; full scale approximated by the measured cursor span |
+    | $\Delta V_x,\,\Delta V_y$ (scope, dual-cursor) | per measurement | $\sqrt{\left[(0.024\,\lvert V\rvert+5\,\mathrm{mV})/\sqrt{3}\right]^2 + (\mathrm{LSD}/\sqrt{12})^2}$ | Agilent 7000A data sheet, p. 18: dual-cursor accuracy $=\pm(2.0\%$ vertical gain $+0.4\%$ full scale $+5\,\mathrm{mV})$, treated as a Type-B rectangular bound; full scale approximated by the measured cursor span |
     """
     mo.vstack([mo.md("## Uncertainties"), mo.center(mo.md(_budget_md))])
     return
