@@ -42,7 +42,10 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _():
+    import sys
     from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
     import numpy as np
     import pandas as pd
@@ -96,7 +99,7 @@ def _():
 
     _here = Path(__file__).resolve().parent
     DATA_XLSX = _here / 'data' / 'data.xlsx'
-    FIG_DIR    = _here.parent / 'report' / 'media'
+    FIG_DIR    = _here.parent.parent / 'report' / 'media'
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     # CODATA-2022 μ₀ (post-2019 SI); uncertainty ~10⁻¹⁶ is negligible
     # vs. our ~10⁻⁸ measurement σ, but is carried for nσ reporting.
