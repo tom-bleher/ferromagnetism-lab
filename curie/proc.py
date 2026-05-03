@@ -23,12 +23,23 @@ def _(mo):
 
     - calibrate LabVIEW voltages with the experiment relations from the guides;
     - subtract a high-temperature linear magnetic background;
-    - implement three methods to extract a per-loop order parameter:
-        1. **remanence** $M_r(T)$ at $H=0$,
-        2. **fixed-field branch split** $M_\mathrm{sep}(T;H_*)$,
-        3. **high-field saturation extrapolation** $M_0(T)$ from the
-           reversible asymptotic regime of each branch;
-    - chain Method 3 into a weighted mean-field fit
+    - implement three methods to extract a per-loop order parameter
+      from the *single* hysteresis loop measured at each temperature.
+      Each proxy is the half-difference of the upper and lower branch
+      values of the same loop, evaluated at a specific field; the two
+      branches give $\pm$ the proxy by symmetry, so the half-difference
+      cancels any DC offset on $V_y$. The three methods differ only in
+      the evaluation field and the fitting procedure:
+        1. **Method I** — $M_r(T)$, branches at $H=0$. The remanence;
+           same quantity as the LabVIEW realtime trace $V_y(V_x{=}0)$.
+        2. **Method II** — $M_\mathrm{sat}(T)$, branches at $H=\pm H_\mathrm{sat}$
+           (saturation tip). Same quantity as the LabVIEW realtime
+           trace $V_y(V_x{=}V_{x,\max})$.
+        3. **Method III** — $M_0(T)$, the same single loop's saturation
+           tail fitted linearly and *extrapolated back to $H=0$*. This
+           is the guide's algebraic Method III ("$B-(\alpha+1)H=M_0$");
+           the spontaneous magnetization.
+    - chain Method III into a weighted mean-field fit
       $M_0^2(T)\propto T_c-T$ to extract $T_c\pm\sigma_{T_c}$.
 
     The calibration relations used are
@@ -515,7 +526,14 @@ def _(
 
     valid_indices = np.arange(field_ready_start_index, len(data))
     common_hmax = float(branch_hmax[valid_indices].min())
-    H_STAR = 0.50 * common_hmax
+    # Method II is evaluated at the saturation field H = ±H_sat ≈ H_max,
+    # mirroring the LabVIEW realtime "Y(X_min/max)" trace (red curve in
+    # the on-screen monitor). Setting H_sat strictly equal to the per-loop
+    # H_max would put us at the very edge of the recorded sweep, where
+    # nearest-neighbour interpolation has no points outside the bracket;
+    # a small inboard offset (0.98 H_max) keeps the local fit well-posed
+    # while staying inside the saturation regime that matches LabVIEW.
+    H_SAT = 0.98 * common_hmax
 
     records = []
     for _i in valid_indices:
@@ -524,20 +542,30 @@ def _(
         _M_pos_corr = remove_background(_H_pos, _M_pos)
         _M_neg_corr = remove_background(_H_neg, _M_neg)
 
-        # Method 1: local linear fit to M(H) at H=0 on each branch. Gives
-        # both the intercept and a per-loop 1-sigma from the residuals.
+        # Method I: M_r(T) ≡ ½ |M_+(T, H=0) − M_-(T, H=0)|.
+        # Local linear fit to M(H) at H=0 on each branch gives both the
+        # intercept (M_±(T, 0)) and a per-loop 1-sigma from residuals.
         _M_pos_0, _s_pos_0 = local_intercept_at(_H_pos, _M_pos_corr, 0.0)
         _M_neg_0, _s_neg_0 = local_intercept_at(_H_neg, _M_neg_corr, 0.0)
-        _Mr = 0.5 * abs(_M_pos_0 - _M_neg_0)
-        _sigma_Mr = 0.5 * float(np.hypot(_s_pos_0, _s_neg_0))
+        _M_r = 0.5 * abs(_M_pos_0 - _M_neg_0)
+        _sigma_M_r = 0.5 * float(np.hypot(_s_pos_0, _s_neg_0))
 
-        # Method 2: same idea at the symmetric fixed field +/- H_STAR.
-        _M_pos_star, _s_pos_star = local_intercept_at(_H_pos, _M_pos_corr, H_STAR)
-        _M_neg_star, _s_neg_star = local_intercept_at(_H_neg, _M_neg_corr, -H_STAR)
-        _Msep = 0.5 * abs(_M_pos_star - _M_neg_star)
-        _sigma_Msep = 0.5 * float(np.hypot(_s_pos_star, _s_neg_star))
+        # Method II: M_sat(T) ≡ ½ |M_+(T, +H_sat) − M_-(T, -H_sat)|,
+        # evaluated near the saturation tips of the loop. This mirrors
+        # the LabVIEW realtime "Y(X_min/max)" trace (red curve in the
+        # on-screen monitor) — what the instructor's display shows for
+        # M_sat(T). Same local-fit machinery as Method I but at H=±H_sat
+        # rather than H=0.
+        _M_pos_sat, _s_pos_sat = local_intercept_at(_H_pos, _M_pos_corr, H_SAT)
+        _M_neg_sat, _s_neg_sat = local_intercept_at(_H_neg, _M_neg_corr, -H_SAT)
+        _M_sat = 0.5 * abs(_M_pos_sat - _M_neg_sat)
+        _sigma_M_sat = 0.5 * float(np.hypot(_s_pos_sat, _s_neg_sat))
 
-        # Method 3 (per the official guide): "fit a linear approximation
+        # Method III: M_0(T) ≡ ½ |M_+^sat(T) − M_-^sat(T)|, where
+        # M_±^sat(T) is the linear-fit extrapolation of the ± branch's
+        # saturated tail back to H=0 — i.e. the y-intercept b_± of the
+        # linear fit, equal to ±M_0 by symmetry.
+        # Per the official guide: "fit a linear approximation
         # in the saturation regime and extrapolate to H=0".
         # Algebra (guide page 2):
         #   in saturation,   M = M_0 + alpha * H
@@ -573,9 +601,9 @@ def _(
         _bf_pos, _ = sat_intercept_fixed(_H_pos, _M_pos_corr, tail="pos")
         _bf_neg, _ = sat_intercept_fixed(_H_neg, _M_neg_corr, tail="neg")
 
-        _M0 = 0.5 * (_b_pos - _b_neg)
-        _sigma_M0 = 0.5 * float(np.hypot(_s_pos, _s_neg))
-        _M0_5pt = 0.5 * (_bf_pos - _bf_neg)
+        _M_0 = 0.5 * (_b_pos - _b_neg)
+        _sigma_M_0 = 0.5 * float(np.hypot(_s_pos, _s_neg))
+        _M_0_5pt = 0.5 * (_bf_pos - _bf_neg)
         _ns = (_n_pos, _n_neg)
 
         records.append({
@@ -584,68 +612,69 @@ def _(
             "temperature_K": TEMPERATURE_K[_i],
             "sigma_T_K": float(sigma_T_K[_i]),
             "branch_hmax_A_per_m": branch_hmax[_i],
-            "remanence_A_per_m": _Mr,
-            "sigma_remanence_A_per_m": _sigma_Mr,
-            "fixed_field_A_per_m": _Msep,
-            "sigma_fixed_field_A_per_m": _sigma_Msep,
-            "M0_A_per_m": _M0,
-            "sigma_M0_A_per_m": _sigma_M0,
-            "M0_5pt_A_per_m": _M0_5pt,
-            "M0_n_used_avg": float(np.mean(_ns)),
+            "M_r_A_per_m": _M_r,
+            "sigma_M_r_A_per_m": _sigma_M_r,
+            "M_sat_A_per_m": _M_sat,
+            "sigma_M_sat_A_per_m": _sigma_M_sat,
+            "M_0_A_per_m": _M_0,
+            "sigma_M_0_A_per_m": _sigma_M_0,
+            "M_0_5pt_A_per_m": _M_0_5pt,
+            "M_0_n_used_avg": float(np.mean(_ns)),
         })
 
     summary = pd.DataFrame.from_records(records)
-    summary["remanence_norm"], summary["sigma_remanence_norm"] = normalize_01_with_sigma(
-        summary["remanence_A_per_m"].to_numpy(),
-        summary["sigma_remanence_A_per_m"].to_numpy(),
+    summary["M_r_norm"], summary["sigma_M_r_norm"] = normalize_01_with_sigma(
+        summary["M_r_A_per_m"].to_numpy(),
+        summary["sigma_M_r_A_per_m"].to_numpy(),
     )
-    summary["fixed_field_norm"], summary["sigma_fixed_field_norm"] = normalize_01_with_sigma(
-        summary["fixed_field_A_per_m"].to_numpy(),
-        summary["sigma_fixed_field_A_per_m"].to_numpy(),
+    summary["M_sat_norm"], summary["sigma_M_sat_norm"] = normalize_01_with_sigma(
+        summary["M_sat_A_per_m"].to_numpy(),
+        summary["sigma_M_sat_A_per_m"].to_numpy(),
     )
-    summary["M0_norm"], summary["sigma_M0_norm"] = normalize_01_with_sigma(
-        np.abs(summary["M0_A_per_m"].to_numpy()),
-        summary["sigma_M0_A_per_m"].to_numpy(),
+    summary["M_0_norm"], summary["sigma_M_0_norm"] = normalize_01_with_sigma(
+        np.abs(summary["M_0_A_per_m"].to_numpy()),
+        summary["sigma_M_0_A_per_m"].to_numpy(),
     )
 
     _T_used = summary["temperature_K"].to_numpy()
     _sT_used = summary["sigma_T_K"].to_numpy()
     diagnostics = pd.DataFrame([
-        {"method": "1. remanence", **transition_diagnostics(_T_used, summary["remanence_norm"].to_numpy())},
-        {"method": f"2. fixed field, H*={H_STAR:.2f} A/m", **transition_diagnostics(_T_used, summary["fixed_field_norm"].to_numpy())},
-        {"method": "3. M_0 saturation extrapolation", **transition_diagnostics(_T_used, summary["M0_norm"].to_numpy())},
+        {"method": r"I: $M_r$ (H=0)", **transition_diagnostics(_T_used, summary["M_r_norm"].to_numpy())},
+        {"method": rf"II: $M_\mathrm{{sat}}$ (H=±{H_SAT:.2f} A/m)", **transition_diagnostics(_T_used, summary["M_sat_norm"].to_numpy())},
+        {"method": r"III: $M_0$ (sat. extrap.→H=0)", **transition_diagnostics(_T_used, summary["M_0_norm"].to_numpy())},
     ])
 
     # Bootstrap-with-sigma half-height T_c for each method. Folds the
     # per-loop sigma_T (heating-rate smearing) and the per-loop sigma_y
     # together to give a usable statistical 1-sigma on the half-height
-    # crossing temperature. Methods 1 and 2 use this; Method 3 quotes
-    # T_c from the M_0^2(T) line below instead.
-    _tc_rem, _stc_rem = half_height_tc_with_sigma(
+    # crossing temperature. Methods I and II use this; Method III also
+    # produces a half-height crossing on the normalized M_0 curve, but
+    # its formal T_c estimate comes from the M_0^2(T) ODR fit below.
+    _tc_M_r, _stc_M_r = half_height_tc_with_sigma(
         _T_used, _sT_used,
-        summary["remanence_norm"].to_numpy(),
-        summary["sigma_remanence_norm"].to_numpy(),
+        summary["M_r_norm"].to_numpy(),
+        summary["sigma_M_r_norm"].to_numpy(),
         rng_seed=1,
     )
-    _tc_sep, _stc_sep = half_height_tc_with_sigma(
+    _tc_M_sat, _stc_M_sat = half_height_tc_with_sigma(
         _T_used, _sT_used,
-        summary["fixed_field_norm"].to_numpy(),
-        summary["sigma_fixed_field_norm"].to_numpy(),
+        summary["M_sat_norm"].to_numpy(),
+        summary["sigma_M_sat_norm"].to_numpy(),
         rng_seed=2,
     )
-    _tc_M0n, _stc_M0n = half_height_tc_with_sigma(
+    _tc_M_0, _stc_M_0 = half_height_tc_with_sigma(
         _T_used, _sT_used,
-        summary["M0_norm"].to_numpy(),
-        summary["sigma_M0_norm"].to_numpy(),
+        summary["M_0_norm"].to_numpy(),
+        summary["sigma_M_0_norm"].to_numpy(),
         rng_seed=3,
     )
     diagnostics_with_sigma = pd.DataFrame([
-        {"method": "1. remanence (half-height)",          "Tc_K": _tc_rem, "sigma_Tc_K": _stc_rem},
-        {"method": f"2. fixed field, H*={H_STAR:.2f} A/m", "Tc_K": _tc_sep, "sigma_Tc_K": _stc_sep},
-        {"method": "3. M_0 norm (half-height)",            "Tc_K": _tc_M0n, "sigma_Tc_K": _stc_M0n},
+        {"method": r"I: $M_r$ (half-height, H=0)",                     "Tc_K": _tc_M_r,    "sigma_Tc_K": _stc_M_r},
+        {"method": rf"II: $M_\mathrm{{sat}}$ (half-height, H=±{H_SAT:.2f} A/m)", "Tc_K": _tc_M_sat, "sigma_Tc_K": _stc_M_sat},
+        {"method": r"III: $M_0$ (half-height, sat. extrap.→H=0)",      "Tc_K": _tc_M_0,    "sigma_Tc_K": _stc_M_0},
     ])
     return (
-        H_STAR,
+        H_SAT,
         common_hmax,
         diagnostics,
         diagnostics_with_sigma,
@@ -656,7 +685,7 @@ def _(
 
 @app.cell(hide_code=True)
 def _(
-    H_STAR,
+    H_SAT,
     common_hmax,
     diagnostics,
     diagnostics_with_sigma,
@@ -682,28 +711,65 @@ def _(
     mo.md(rf"""
     ## Extracted methods
 
-    **Method 1: remanence**
+    Each loop is *one* measurement at one temperature, recorded by
+    LabVIEW as 128 samples on each branch ($H\!\ge\!0$ half of the
+    upper branch in `*_pos`, $H\!\le\!0$ half of the lower branch in
+    `*_neg`). All three methods reduce that single loop to a scalar
+    order-parameter proxy $V(T)$ by reading the loop's $V_y\propto B$
+    response at a specified $V_x\propto H$ position. They differ only
+    in **where** the position is and **how** the value at that position
+    is obtained.
+
+    The two LabVIEW realtime traces shown on the instrument monitor —
+    $V_y(V_x{{=}}0)$ (white) and $V_y(V_x{{=}}V_{{x,\max}})$ (red) —
+    are exactly Methods I and II below. Method III adds a third proxy
+    that goes beyond the realtime display: it *extrapolates* the
+    saturated-tail linear fit back to $H=0$ to extract the spontaneous
+    magnetization $M_0$ (the guide's algebraic "Method III").
+
+    For numerical robustness against any common DC offset on $V_y$, we
+    don't use a single-branch reading; instead we read both the upper
+    branch (at $+H_\mathrm{{eval}}$) and the lower branch (at
+    $-H_\mathrm{{eval}}$) of the *same loop* and take their
+    *half-difference*. By symmetry $M_+\to+M_\mathrm{{proxy}}$ and
+    $M_-\to-M_\mathrm{{proxy}}$, so the half-difference equals
+    $M_\mathrm{{proxy}}$ exactly while any $H$-independent bias on $V_y$
+    cancels between branches. The notation $M_\pm$ below labels the
+    *upper / lower branch of the same hysteresis loop*, not two
+    separate experimental measurements.
+
+    **Method I: $M_r(T)$ — branches read at $H=0$ (remanence; LabVIEW $V_y(V_x{{=}}0)$)**
 
     $$
-    M_r(T)=\frac12\left|M_+(T,0)-M_-(T,0)\right|.
+    M_r(T)\;\equiv\;\tfrac12\left|M_+(T,H{{=}}0)-M_-(T,H{{=}}0)\right|.
     $$
 
-    **Method 2: fixed field**
+    $M_\pm(T,0)$ comes from a *local* linear fit of $M_\pm(T,H)$ on
+    the few branch samples nearest $H=0$.
 
-    The LabVIEW table stores positive and negative half-loops separately, so this sketch uses a fixed magnitude $|H_*|$ and compares $+H_*$ on the positive branch with $-H_*$ on the negative branch:
+    **Method II: $M_\mathrm{{sat}}(T)$ — branches read at $H=\pm H_\mathrm{{sat}}$ (saturation tip; LabVIEW $V_y(V_x{{=}}V_{{x,\max}})$)**
 
     $$
-    M_\mathrm{{sep}}(T;H_*)=\frac12\left|M_+(T,+H_*)-M_-(T,-H_*)\right|.
+    M_\mathrm{{sat}}(T)\;\equiv\;\tfrac12\left|M_+(T,H{{=}}{{+}}H_\mathrm{{sat}})-M_-(T,H{{=}}{{-}}H_\mathrm{{sat}})\right|.
     $$
 
-    Rows before `T = {field_ready_temperature_K:.3f} K` are excluded because the measured branch field amplitude had not yet reached the stable drive-field plateau. This removes the early under-magnetized garbage data before normalization.
+    Same local-fit machinery as Method I but evaluated near the loop's
+    saturation tips, mirroring the LabVIEW $V_y(V_{{x,\max}})$ trace.
+    We use $H_\mathrm{{sat}} = {H_SAT:.2f}\,\mathrm{{A\,m^{{-1}}}}$
+    ($\approx 0.98\,H_{{\max}}$ on the common branch amplitude
+    $H_{{\max}}={common_hmax:.2f}\,\mathrm{{A\,m^{{-1}}}}$), inboard
+    just enough to keep the local nearest-neighbour interpolation
+    well-posed at the loop edge. This is the guide's algebraic
+    Method II ("$B-H_{{\max}}=M$" at saturation, with $\alpha\to 0$).
 
-    Here $H_* = {H_STAR:.2f}\,\mathrm{{A\,m^{{-1}}}}$, chosen as half of the common branch-amplitude range $H_\max={common_hmax:.2f}\,\mathrm{{A\,m^{{-1}}}}$ so every retained loop can be interpolated at the same field.
+    Rows before $T={field_ready_temperature_K:.3f}\,\mathrm{{K}}$ are excluded
+    from Methods I, II, and III because the measured branch field amplitude
+    had not yet reached the stable drive-field plateau.
 
-    **Method 3: linear approximation in saturation, extrapolated to $H=0$**
+    **Method III: $M_0(T)$ — single-loop saturation tail, linearly extrapolated to $H=0$**
 
-    Following the official guide: in the saturation regime the loop
-    response is well-approximated as
+    Following the official guide: in the saturation regime the same
+    single loop's response is well-approximated by
 
     $$
     M(H)=M_0+\alpha H \;\;\Longleftrightarrow\;\;
@@ -711,16 +777,35 @@ def _(
     B-(\alpha+1)H=M_0,
     $$
 
-    so the spontaneous magnetization $M_0(T)$ is recovered *as the
-    intersection of the saturation-tail linear fit with the $H=0$ axis*
-    — i.e. the y-intercept of a straight line fitted to the saturated
-    end of each branch. We fit the linear model $M(H)=M_0+\alpha H$
-    directly (since we already evaluated $M=B/\mu_0-H$), so the fit's
-    intercept *is* $M_0$ and its slope is $\alpha=\chi_\mathrm{{HF}}$
-    (high-field susceptibility). $M_0(T)$ is the spontaneous
-    magnetization, distinct from the remanence $M_r(T)=\frac12|M_+(T,0)-M_-(T,0)|$:
-    $M_r$ is the loop's memory at $H=0$, while $M_0$ is the
-    extrapolation of the saturated branch back to $H=0$.
+    so $M_0(T)$ is recovered *as the intersection of the
+    saturation-tail linear fit with the $H=0$ axis*. The same hysteresis
+    loop has two saturation tips — the $+H$ end of the upper branch and
+    the $-H$ end of the lower branch — and we fit one straight line on
+    each tip:
+
+    $$
+    M_+(T,H) = b_+(T) + \alpha_+(T)\,H \quad\text{{on the upper-branch }}+H\text{{ tail}},
+    $$
+    $$
+    M_-(T,H) = b_-(T) + \alpha_-(T)\,H \quad\text{{on the lower-branch }}-H\text{{ tail}}.
+    $$
+
+    By symmetry $b_+\to+M_0$ and $b_-\to-M_0$ in the limit of an ideal
+    loop, so the proxy is
+
+    $$
+    M_0(T)\;\equiv\;\tfrac12\,\bigl|\,b_+(T)-b_-(T)\,\bigr|.
+    $$
+
+    The intercepts $b_\pm$ are *not* two independent measurements; they
+    are two algebraic intercepts of two linear fits applied to two
+    different ends of the *same* hysteresis loop. This makes the
+    parallel structure with Methods I and II explicit: all three are
+    $\tfrac12|M_+(T,H_\text{{eval}})-M_-(T,H_\text{{eval}})|$ with
+    $H_\text{{eval}}=0$ (Method I), $H_\text{{eval}}=\pm H_\mathrm{{sat}}$
+    (Method II), or $H_\text{{eval}}=0$ *via the saturation-fit
+    extrapolation* (Method III). The fitted slope $\alpha=\chi_\mathrm{{HF}}$
+    is the high-field susceptibility (the guide's $\alpha$).
 
     The fit window is grown adaptively from $n_\mathrm{{min}}=5$ points
     (the lab guide's prescription) outward, ranked by tail-side $|H|$;
@@ -729,15 +814,10 @@ def _(
     both signal the end of the linear/saturated regime. The LabVIEW
     export stores the $H\ge0$ half of the upper branch and the $H\le0$
     half of the lower branch, so each loop contributes two saturated
-    tips: the $+H$ end of the upper branch and the $-H$ end of the
-    lower branch. Their linear extrapolations hit the $M$-axis at
-    $+M_0$ and $-M_0$ respectively, giving
-    $M_0=\frac12(b^{{(+)}}-b^{{(-)}})$ — the half-difference of the
-    two signed intercepts, which automatically cancels any
-    field-independent common offset between the branches. Statistical
-    uncertainty is propagated in quadrature from the per-fit intercept
-    sigmas. The instructor's strict 5-point fit is retained alongside
-    as `M0_5pt_A_per_m` for cross-checking.
+    tips. Statistical uncertainty on $M_0$ is propagated in quadrature
+    from the two per-fit intercept sigmas. The instructor's strict
+    5-point fit is retained alongside as `M_0_5pt_A_per_m` for
+    cross-checking.
 
     The branches are pre-corrected for the global paramagnetic
     background (fitted in the high-T cell above) before the saturation
@@ -748,17 +828,15 @@ def _(
     the two branches — but separating $\alpha$ from $\chi_\mathrm{{bg}}$
     keeps the slope-stability gate physically interpretable.
 
-    Methods 1 and 2 are normalized to $[0,1]$ for half-height and
-    steepest-slope diagnostics:
+    All three proxies $M_r(T)$, $M_\mathrm{{sat}}(T)$, and $M_0(T)$ are
+    normalized to $[0,1]$ for half-height and steepest-slope diagnostics:
 
     $$
     y_\mathrm{{norm}}=\frac{{y-\min(y)}}{{\max\!\left(y-\min(y)\right)}}.
     $$
 
-    Method 3 is reported in absolute units $\mathrm{{A\,m^{{-1}}}}$ and
-    additionally normalized for the comparison plot. The proper $T_c$
-    estimate uses the absolute $M_0(T)$ in a weighted $M_0^2(T)$ fit
-    below.
+    Method III is *additionally* kept in absolute units $\mathrm{{A\,m^{{-1}}}}$
+    so $M_0(T)$ can feed the weighted $M_0^2(T)$ mean-field fit below.
 
     **Quick-look transition diagnostics** (half-height crossing and
     steepest-slope temperature on the smoothed normalized curve, no
@@ -766,17 +844,17 @@ def _(
 
     {table_md(diag, ["method", "half_height_K", "steepest_slope_K", "steepest_slope_value"])}
 
-    **Half-height $T_c$ with bootstrap $\sigma$** (Methods 1 and 2;
-    Method 3 also shown on the normalized $M_0$ curve, but the proper
-    $T_c$ for Method 3 comes from the $M_0^2(T)$ ODR fit below). Each
-    row is the half-height crossing temperature with a 1-sigma from
-    400 Monte-Carlo replicas that jointly perturb $T$ by per-loop
-    $\sigma_T$ (heating-rate smearing) and $y$ by per-loop $\sigma_y$
-    (local-fit residuals from Methods 1/2):
+    **Half-height $T_c$ with bootstrap $\sigma$** for all three
+    methods. Each row is the half-height crossing temperature with a
+    1-sigma from 400 Monte-Carlo replicas that jointly perturb $T$ by
+    per-loop $\sigma_T$ (heating-rate smearing) and $y$ by per-loop
+    $\sigma_y$ (residuals from each method's per-loop fit). Method III
+    also feeds the formal mean-field $T_c$ from the $M_0^2(T)$ ODR
+    fit below.
 
     {table_md(diag_sig, ["method", "Tc_K", "sigma_Tc_K"])}
 
-    Normalized ranges: remanence `{summary['remanence_norm'].min():.3f}`--`{summary['remanence_norm'].max():.3f}`, fixed-field `{summary['fixed_field_norm'].min():.3f}`--`{summary['fixed_field_norm'].max():.3f}`, $M_0$ `{summary['M0_norm'].min():.3f}`--`{summary['M0_norm'].max():.3f}`. Mean adaptive window size: `{summary['M0_n_used_avg'].mean():.1f}` points.
+    Normalized ranges: $M_r$ `{summary['M_r_norm'].min():.3f}`--`{summary['M_r_norm'].max():.3f}`, $M_\mathrm{{sat}}$ `{summary['M_sat_norm'].min():.3f}`--`{summary['M_sat_norm'].max():.3f}`, $M_0$ `{summary['M_0_norm'].min():.3f}`--`{summary['M_0_norm'].max():.3f}`. Mean adaptive window size: `{summary['M_0_n_used_avg'].mean():.1f}` points.
     """)
     return
 
@@ -803,8 +881,8 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, summary):
     # the fit is perfect.
     T_all = summary["temperature_K"].to_numpy()
     sT_all = summary["sigma_T_K"].to_numpy()
-    M0_all = summary["M0_A_per_m"].to_numpy()
-    sM0_all = summary["sigma_M0_A_per_m"].to_numpy()
+    M0_all = summary["M_0_A_per_m"].to_numpy()
+    sM0_all = summary["sigma_M_0_A_per_m"].to_numpy()
     M0_sq_all = M0_all ** 2
     sM0_sq_all = 2.0 * np.abs(M0_all) * sM0_all
 
@@ -930,8 +1008,8 @@ def _(FIT_HALFWIDTH_K, FIT_UPPER_MARGIN_K, Tc_C, Tc_K, fit_mask, mo, odr_result,
     per-loop $y$-bar.
 
     Adaptive vs 5-point baseline (mean over retained loops):
-    $\langle M_0^\text{{adapt}}\rangle = {summary['M0_A_per_m'].mean():.3g}$,
-    $\langle M_0^\text{{5pt}}\rangle = {summary['M0_5pt_A_per_m'].mean():.3g}\;\mathrm{{A\,m^{{-1}}}}$.
+    $\langle M_0^\text{{adapt}}\rangle = {summary['M_0_A_per_m'].mean():.3g}$,
+    $\langle M_0^\text{{5pt}}\rangle = {summary['M_0_5pt_A_per_m'].mean():.3g}\;\mathrm{{A\,m^{{-1}}}}$.
     """)
     return
 
@@ -1100,9 +1178,9 @@ def _(Line2D, diagnostics, np, plt, save_figure, smooth, summary):
     temperature = summary["temperature_K"].to_numpy()
     sigma_T_arr = summary["sigma_T_K"].to_numpy()
     series = [
-        ("remanence_norm", "sigma_remanence_norm", "Remanence", "C0", "o"),
-        ("fixed_field_norm", "sigma_fixed_field_norm", "Fixed field", "C3", "s"),
-        ("M0_norm", "sigma_M0_norm", r"$M_0$ extrap.", "C2", "^"),
+        ("M_r_norm",    "sigma_M_r_norm",    r"$M_r$  ($H{=}0$)",                   "C0", "o"),
+        ("M_sat_norm",  "sigma_M_sat_norm",  r"$M_\mathrm{sat}$  ($H{=}\pm H_\mathrm{sat}$)",  "C3", "s"),
+        ("M_0_norm",    "sigma_M_0_norm",    r"$M_0$  (sat. extrap.$\to H{=}0$)",   "C2", "^"),
     ]
 
     legend_handles = []
@@ -1372,10 +1450,11 @@ def _(
 
 @app.cell(hide_code=True)
 def _(SIGMA_T_ABS_K, Tc_K, cross_run, diagnostics_with_sigma, mo, np, sigma_Tc_K):
-    # Bottom-line. The half-height crossings (Methods 1, 2, 3-normalized)
-    # are the headline estimators because they are model-free: each one
-    # locates where the smoothed M(T) curve crosses 50% of its dynamic
-    # range. The mean-field M_0^2(T) line zero-crossing (Method 3,
+    # Bottom-line. The half-height crossings of M_r, M_sat, and M_0
+    # (Methods I, II, III in normalized form) are the headline
+    # estimators because they are model-free: each locates the
+    # temperature where the smoothed proxy crosses 50% of its dynamic
+    # range. The mean-field M_0^2(T) line zero-crossing (Method III in
     # absolute units) is reported as a cross-check; it sits ~15-20 K
     # above the half-height numbers because the mean-field square-root
     # form is only an approximation in a narrow window below T_c, so its
