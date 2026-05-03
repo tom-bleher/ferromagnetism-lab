@@ -353,29 +353,22 @@ def _(
         _M_pos_star = interpolate_sorted(_H_pos, _M_pos_corr, H_STAR)
         _M_neg_star = interpolate_sorted(_H_neg, _M_neg_corr, -H_STAR)
 
-        # Method 3: extrapolate each saturated tail to H=0. Each branch
-        # contributes two estimates (one per signed tail); the four signed
-        # intercepts are flipped to all-positive and averaged to give M0.
-        # Negative-tail intercepts pick up a sign flip because the linear
-        # extrapolation crosses H=0 from the opposite side.
-        _tails = (
-            (_H_pos, _M_pos, "pos", +1.0),
-            (_H_pos, _M_pos, "neg", -1.0),
-            (_H_neg, _M_neg, "pos", +1.0),
-            (_H_neg, _M_neg, "neg", -1.0),
-        )
-        _intercepts, _sigmas, _ns, _intercepts_5pt = [], [], [], []
-        for _H_branch, _M_branch, _tail, _sign in _tails:
-            _b, _s, _n = sat_intercept(_H_branch, _M_branch, tail=_tail)
-            _bf, _ = sat_intercept_fixed(_H_branch, _M_branch, tail=_tail)
-            _intercepts.append(_sign * _b)
-            _sigmas.append(_s)
-            _ns.append(_n)
-            _intercepts_5pt.append(_sign * _bf)
+        # Method 3: extrapolate each saturated tail to H=0. The LabVIEW
+        # table stores the H>=0 half of the upper branch in *_pos and the
+        # H<=0 half of the lower branch in *_neg, so each loop has exactly
+        # two saturation tips: the +H end of _pos (intercept = +M0) and
+        # the -H end of _neg (intercept = -M0). The other ends of each
+        # half are the remanence region, not saturation, and must not be
+        # used here. M0 is the half-difference of the two signed intercepts.
+        _b_pos, _s_pos, _n_pos = sat_intercept(_H_pos, _M_pos, tail="pos")
+        _b_neg, _s_neg, _n_neg = sat_intercept(_H_neg, _M_neg, tail="neg")
+        _bf_pos, _ = sat_intercept_fixed(_H_pos, _M_pos, tail="pos")
+        _bf_neg, _ = sat_intercept_fixed(_H_neg, _M_neg, tail="neg")
 
-        _M0 = float(np.mean(_intercepts))
-        _sigma_M0 = float(np.sqrt(np.sum(np.square(_sigmas))) / len(_sigmas))
-        _M0_5pt = float(np.mean(_intercepts_5pt))
+        _M0 = 0.5 * (_b_pos - _b_neg)
+        _sigma_M0 = 0.5 * float(np.hypot(_s_pos, _s_neg))
+        _M0_5pt = 0.5 * (_bf_pos - _bf_neg)
+        _ns = (_n_pos, _n_neg)
 
         records.append({
             "time_s": TIME_S[_i],
