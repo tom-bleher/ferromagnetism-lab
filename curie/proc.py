@@ -715,12 +715,12 @@ def _(
 
     {table_md(diag, ["method", "half_height_K", "steepest_slope_K", "steepest_slope_value"])}
 
-    **Half-height $T_c$ with bootstrap $\\sigma$** (Methods 1 and 2;
+    **Half-height $T_c$ with bootstrap $\sigma$** (Methods 1 and 2;
     Method 3 also shown on the normalized $M_0$ curve, but the proper
     $T_c$ for Method 3 comes from the $M_0^2(T)$ ODR fit below). Each
     row is the half-height crossing temperature with a 1-sigma from
     400 Monte-Carlo replicas that jointly perturb $T$ by per-loop
-    $\\sigma_T$ (heating-rate smearing) and $y$ by per-loop $\\sigma_y$
+    $\sigma_T$ (heating-rate smearing) and $y$ by per-loop $\sigma_y$
     (local-fit residuals from Methods 1/2):
 
     {table_md(diag_sig, ["method", "Tc_K", "sigma_Tc_K"])}
