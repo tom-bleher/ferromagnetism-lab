@@ -909,25 +909,32 @@ def _(
 
 
 @app.cell
-def _(diagnostics_with_sigma, fit_functions, np, odr_fit, summary):
+def _(diagnostics_with_sigma, fit_functions, np, odr_fit, pd, summary):
     # Mean-field square-root scaling near Tc:  M0(T)^2 ~= m * (Tc - T).
     # The mean-field form is only valid in a narrow band just below Tc;
-    # far below Tc the M(T) curve has heavy curvature that breaks the
-    # linear M0^2(T). Two safeguards:
+    # far below Tc, M0 saturates (M0 -> Msat) and M0^2 flattens, which
+    # breaks the linear form. A wide-window fit pulls Tc upward.
     #
-    # 1) seed the fit window from the half-height bootstrap T_c estimate
-    #    (run on the normalized M_0 curve in the cell above) so we begin
-    #    with a robust, model-free anchor;
-    # 2) iterate a few times: keep only points within FIT_HALFWIDTH_K of
-    #    the running T_c, refit with ODR, and update T_c. This converges
-    #    in 2-3 iterations and stays inside the mean-field linear regime.
+    # Algorithm: K-scan with p-value selection.
+    #   1. Seed Tc from the half-height bootstrap on the normalized M_0
+    #      curve (the same model-free anchor used elsewhere).
+    #   2. Filter to the candidate pool: M0 > 0, SNR > 3, and
+    #      T <= Tc_seed + FIT_UPPER_MARGIN_K (mean-field has M^2 = 0
+    #      above Tc, so any data further above is noise).
+    #   3. Sort the pool by T descending so the points closest to Tc
+    #      (where mean-field is asymptotically valid) come first.
+    #   4. Sweep K = K_MIN .. K_MAX and run ODR linear fit on the top-K
+    #      points; record (K, Tc_K, chi^2/nu, p-value).
+    #   5. Pick K* = argmax_K p_value(K) -- the largest window for which
+    #      the data are still statistically consistent with a single
+    #      straight line. This naturally rejects the curving low-T tail
+    #      because including it tanks p_value via chi^2 inflation.
+    #   6. Iterate the outer Tc to convergence (the upper-margin filter
+    #      depends on Tc, so two passes are enough in practice).
     #
-    # The redchi reported below should land near 1 if the model is
-    # appropriate for the chosen window. If it stays >> 1 the window is
-    # still too wide or sigma_M0 is underestimated; in that case we
-    # quote sigma_Tc with redchi-rescaled errorbars (the standard ODR
-    # convention when the model imperfectly fits) rather than pretending
-    # the fit is perfect.
+    # K_MIN = 5 is the lab guide's prescription. K_MAX is bounded by
+    # the candidate-pool size; this is large enough that the optimum
+    # lives in the interior of the scan.
     T_all = summary["temperature_K"].to_numpy()
     sT_all = summary["sigma_T_K"].to_numpy()
     M0_all = summary["M_0_A_per_m"].to_numpy()
@@ -935,50 +942,94 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, summary):
     M0_sq_all = M0_all ** 2
     sM0_sq_all = 2.0 * np.abs(M0_all) * sM0_all
 
-    FIT_HALFWIDTH_K = 25.0  # mean-field linear regime is only ~10-30 K wide.
+    K_MIN = 5
     # Margin on the +T side. Strict mean-field has M^2 = 0 above Tc, so
     # any data above Tc that survives the M0>0 + SNR>3 filters is upward
-    # noise — including it tilts the linear fit and pulls Tc above its
-    # true value. We keep a small +2 K margin so a couple of marginal
-    # points right at the transition stay in (giving the fit some
-    # leverage on the intercept) but no further. (Empirically widening
-    # this to +10 K drives chi^2/nu from ~50 to ~230 and shifts the
-    # mean-field Tc by 20 K — confirming +2 K is the principled choice.)
+    # noise; we keep a small +2 K margin so a couple of marginal points
+    # right at the transition stay in (giving the fit some leverage on
+    # the intercept) but no further.
     FIT_UPPER_MARGIN_K = 2.0
 
-    # Seed Tc from the half-height bootstrap on the normalized M_0 curve.
-    _seed_row = diagnostics_with_sigma.iloc[2]  # method "3. M_0 norm (half-height)"
+    _seed_row = diagnostics_with_sigma.iloc[2]
     _Tc_seed = float(_seed_row["Tc_K"])
     if not np.isfinite(_Tc_seed):
         _Tc_seed = float(np.nanmedian(T_all))
 
     snr = np.abs(M0_all) / np.maximum(sM0_all, 1e-30)
+
+    def _fit_top_K(idx_sorted, K):
+        sel = idx_sorted[:K]
+        sT_s = np.maximum(sT_all[sel], 1e-3 / np.sqrt(12.0))
+        sMsq_s = np.maximum(sM0_sq_all[sel], 1e-30)
+        try:
+            res = odr_fit(
+                fit_functions.linear, None,
+                T_all[sel], sT_s, M0_sq_all[sel], sMsq_s,
+                param_names=["intercept", "slope"],
+            )
+        except Exception:
+            return None
+        b, m = float(res.params[0]), float(res.params[1])
+        if m == 0.0 or not np.isfinite(m):
+            return None
+        return res, sel, -b / m
+
     Tc_iter = _Tc_seed
     odr_result = None
-    for _ in range(5):
-        in_window = (T_all >= Tc_iter - FIT_HALFWIDTH_K) & (T_all <= Tc_iter + FIT_UPPER_MARGIN_K)
-        fit_mask = in_window & (M0_all > 0) & (snr > 3.0)
-        if fit_mask.sum() < 5:
-            order_T = np.argsort(np.abs(T_all - Tc_iter))[:8]
-            fit_mask = np.zeros_like(T_all, dtype=bool)
-            fit_mask[order_T] = True
+    fit_mask = np.zeros_like(T_all, dtype=bool)
+    K_best = K_MIN
+    K_scan_records = []
+    for _outer in range(5):
+        # Candidate pool: physical filters only; window selection is
+        # delegated to the K-scan below.
+        pool = (M0_all > 0) & (snr > 3.0) & (T_all <= Tc_iter + FIT_UPPER_MARGIN_K)
+        idx_pool = np.flatnonzero(pool)
+        if idx_pool.size < K_MIN:
+            # Fallback: if the physical filters reject too much, pick
+            # the K_MIN points whose T is closest to the seed.
+            idx_pool = np.argsort(np.abs(T_all - Tc_iter))[: max(K_MIN, 8)]
+        # Top-K closest to Tc from below: sort by T descending so the
+        # K=K_MIN window is anchored at the high-T (asymptotic) end and
+        # grows downward into the increasingly nonlinear region.
+        idx_sorted = idx_pool[np.argsort(-T_all[idx_pool])]
 
-        sT_fit_safe = np.maximum(sT_all[fit_mask], 1e-3 / np.sqrt(12.0))
-        sMsq_fit_safe = np.maximum(sM0_sq_all[fit_mask], 1e-30)
-        odr_result = odr_fit(
-            fit_functions.linear, None,
-            T_all[fit_mask], sT_fit_safe, M0_sq_all[fit_mask], sMsq_fit_safe,
-            param_names=["intercept", "slope"],
-        )
-        intercept_new = float(odr_result.params[0])
-        slope_new = float(odr_result.params[1])
-        if slope_new == 0.0 or not np.isfinite(slope_new):
+        K_max_eff = len(idx_sorted)
+        scan_local = []
+        for K in range(K_MIN, K_max_eff + 1):
+            out = _fit_top_K(idx_sorted, K)
+            if out is None:
+                continue
+            res_K, sel_K, Tc_K_val = out
+            scan_local.append({
+                "K": K,
+                "Tc_K": Tc_K_val,
+                "redchi": float(res_K.redchi),
+                "p_value": float(res_K.p_value),
+                "_res": res_K,
+                "_sel": sel_K,
+            })
+        if not scan_local:
             break
-        Tc_new = -intercept_new / slope_new
+
+        # Pick K* = argmax p_value. Ties (rare) resolve to the larger K
+        # for statistical power.
+        best = max(scan_local, key=lambda r: (r["p_value"], r["K"]))
+        odr_result = best["_res"]
+        fit_mask = np.zeros_like(T_all, dtype=bool)
+        fit_mask[best["_sel"]] = True
+        K_best = int(best["K"])
+        Tc_new = float(best["Tc_K"])
+        K_scan_records = scan_local
+
         if abs(Tc_new - Tc_iter) < 0.05:
             Tc_iter = Tc_new
             break
         Tc_iter = Tc_new
+
+    K_scan_table = pd.DataFrame([
+        {"K": r["K"], "Tc_K": r["Tc_K"], "redchi": r["redchi"], "p_value": r["p_value"]}
+        for r in K_scan_records
+    ])
 
     msq_intercept = float(odr_result.params[0])
     msq_slope = float(odr_result.params[1])
@@ -1007,8 +1058,10 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, summary):
     sigma_Tc_K = float(np.sqrt(max(0.0, var_Tc)))
     Tc_C = Tc_K - 273.15
     return (
-        FIT_HALFWIDTH_K,
         FIT_UPPER_MARGIN_K,
+        K_MIN,
+        K_best,
+        K_scan_table,
         M0_sq_all,
         Tc_C,
         Tc_K,
@@ -1025,41 +1078,63 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, summary):
 
 
 @app.cell(hide_code=True)
-def _(FIT_HALFWIDTH_K, FIT_UPPER_MARGIN_K, Tc_C, Tc_K, fit_mask, mo, odr_result, rescale, sigma_Tc_K, summary):
+def _(FIT_UPPER_MARGIN_K, K_MIN, K_best, K_scan_table, Tc_C, Tc_K, fit_mask, mo, odr_result, rescale, sigma_Tc_K, summary):
+    # Render the K-scan table as markdown, highlighting the chosen K* row.
+    if not K_scan_table.empty:
+        _hdr = "| K | Tc (K) | chi^2/nu | p-value |"
+        _sep = "|---|---|---|---|"
+        _rows = []
+        for _, _r in K_scan_table.iterrows():
+            _marker = " ⬅ chosen" if int(_r["K"]) == K_best else ""
+            _rows.append(f"| {int(_r['K'])} | {_r['Tc_K']:.2f} | {_r['redchi']:.2f} | {_r['p_value']:.3f}{_marker} |")
+        _scan_md = "\n".join([_hdr, _sep, *_rows])
+    else:
+        _scan_md = "_(K-scan table empty.)_"
+
     mo.md(rf"""
     ## Method 3 cross-check: mean-field $M_0^2(T)$ extrapolation
 
     > **This block is a methodological cross-check, not a $T_c$ measurement.**
     > The mean-field form $M_0^2(T)\propto T_c-T$ is only a near-$T_c$
-    > approximation, and on this data its linear fit returns
-    > $\chi^2/\nu={odr_result.redchi:.1f}$ — the model does not describe
-    > the in-window data. The Birge-rescaled error bar below is therefore
-    > too wide to be informative as an independent estimator. The
-    > headline $T_c$ is the model-free half-height crossing reported in
-    > the bottom-line callout.
+    > approximation, and even on the optimally chosen window
+    > (described below) its Birge-rescaled error bar is too wide to be
+    > informative as an independent estimator. The headline $T_c$ is
+    > the model-free half-height crossing reported in the bottom-line
+    > callout.
 
-    Procedurally: we seed the fit window from the half-height bootstrap
-    $T_c$ on the normalized $M_0$ curve (Methods 1-3 cluster around
-    $\sim$210-216 K), keep only data with
-    $T_c-{FIT_HALFWIDTH_K:.0f}\,\mathrm{{K}}\le T\le T_c+{FIT_UPPER_MARGIN_K:.0f}\,\mathrm{{K}}$
-    and $M_0/\sigma_{{M_0}}>3$, and iterate the ODR fit a few times
-    until $T_c$ stabilises. The fit folds per-loop $\sigma_{{M_0^2}}=2|M_0|\sigma_{{M_0}}$
-    on $y$ and the heating-rate smearing $\sigma_T$ on $x$. The fit
-    converged on `{int(fit_mask.sum())}` points and gives
+    **Window selection by $p$-value scan.** $M_0^2$ flattens far below
+    $T_c$ as $M_0\to M_\mathrm{{sat}}$, so a wide window pulls the fit
+    steep and biases $T_c$ upward. We avoid hand-tuning a halfwidth by
+    scanning the number of points $K$ used: candidate points are those
+    with $M_0>0$, $M_0/\sigma_{{M_0}}>3$, and $T\le T_c+{FIT_UPPER_MARGIN_K:.0f}\,\mathrm{{K}}$;
+    they are sorted by $T$ descending so the top-$K$ window is anchored
+    at the high-$T$ end (where mean-field is asymptotically valid) and
+    grows downward into the increasingly nonlinear region. For each
+    $K\in[{K_MIN:d},K_\mathrm{{max}}]$ we run the ODR linear fit and
+    record $(T_c,\chi^2/\nu,p)$. The selected window is the one
+    maximizing $p$ — i.e. the largest $K$ for which the data are still
+    statistically consistent with a single straight line. The outer
+    $T_c$ is iterated to convergence since the upper-margin filter
+    depends on $T_c$.
+
+    The best window uses **$K^* = {K_best}$** points and converges to
 
     $$
     T_c^\mathrm{{MF}} \;=\; {Tc_K:.1f}\;\mathrm{{K}}\;=\;{Tc_C:.1f}\,^\circ\mathrm{{C}}
-    \quad(\chi^2/\nu={odr_result.redchi:.1f},\;\text{{Birge-rescaled }}\sigma_{{T_c}}=\pm{sigma_Tc_K:.0f}\,\mathrm{{K}}).
+    \quad(\chi^2/\nu={odr_result.redchi:.2f},\;p={odr_result.p_value:.3f},\;\text{{Birge-rescaled }}\sigma_{{T_c}}=\pm{sigma_Tc_K:.1f}\,\mathrm{{K}}).
     $$
 
-    The reduced-chi-square excess measures how poorly the strict
-    mean-field linear form describes the in-window data; the per-loop
-    statistical $\sigma_{{M_0}}$ from the saturation-tail fit
-    underestimates the model-mismatch error, so we Birge-rescale the
-    ODR covariance by $\sqrt{{\chi^2/\nu}}={rescale:.2f}$ before
-    propagating to $\sigma_{{T_c}}$. The result places $T_c$ in the
-    same neighbourhood as the half-height estimators (210-230 K),
-    which is the only useful information this fit conveys.
+    Birge-rescaling: when $\chi^2/\nu>1$ we multiply the covariance by
+    $\chi^2/\nu$ (i.e. errors by $\sqrt{{\chi^2/\nu}}={rescale:.2f}$)
+    so the quoted $\sigma_{{T_c}}$ reflects the actual scatter around
+    the fit rather than the underestimated per-loop $\sigma_{{M_0}}$.
+
+    **K-scan trajectory.** Each row is one ODR fit on the top-$K$
+    points (closest to $T_c$ from below). The chosen row maximizes
+    $p$-value; reading down the table you can see how $\chi^2/\nu$
+    and $T_c$ evolve as more low-$T$ data is forced in.
+
+    {_scan_md}
 
     Adaptive vs 5-point baseline (mean over retained loops):
     $\langle M_0^\text{{adapt}}\rangle = {summary['M_0_A_per_m'].mean():.3g}$,
@@ -1288,6 +1363,61 @@ def _(Line2D, diagnostics, np, plt, save_figure, smooth, summary):
 
     save_figure(fig_methods, "curie_method123_normalized")
     fig_methods
+    return
+
+
+@app.cell
+def _(
+    TEMPERATURE_K,
+    TIME_S,
+    field_ready_temperature_K,
+    high_temperature_mask,
+    plt,
+    save_figure,
+    summary,
+):
+    _fig_acq, (_ax_temp, _ax_field) = plt.subplots(
+        2, 1, figsize=(7.2, 5.2), constrained_layout=True,
+        gridspec_kw={"height_ratios": [1.25, 1.0]},
+    )
+
+    _retained_time = summary["time_s"].to_numpy()
+    _retained_temperature = summary["temperature_K"].to_numpy()
+    _ready_time = float(_retained_time[0])
+
+    _ax_temp.plot(TIME_S, TEMPERATURE_K, color="0.65", linewidth=1.2, label="logged temperature")
+    _ax_temp.scatter(
+        _retained_time, _retained_temperature,
+        s=12, color="C0", alpha=0.75, label="retained loops",
+    )
+    _ax_temp.scatter(
+        TIME_S[high_temperature_mask], TEMPERATURE_K[high_temperature_mask],
+        s=16, color="C2", alpha=0.80, label="background-fit quartile",
+    )
+    _ax_temp.axvline(_ready_time, color="C3", linestyle="--", linewidth=1.0, label="field-ready cut")
+    _ax_temp.set_ylabel(r"$T$ (K)")
+    _ax_temp.set_title("Curie acquisition quality control")
+    _ax_temp.grid(True, which="major", alpha=0.25)
+    _ax_temp.minorticks_on()
+    _ax_temp.grid(True, which="minor", alpha=0.10)
+    _ax_temp.legend(loc="best", fontsize=8)
+
+    _ax_field.errorbar(
+        _retained_temperature,
+        summary["branch_hmax_A_per_m"].to_numpy(),
+        xerr=summary["sigma_T_K"].to_numpy(),
+        fmt="o", color="C0", ecolor="C0", alpha=0.70,
+        markersize=3.0, elinewidth=0.5, capsize=1.5,
+    )
+    _ax_field.axvline(field_ready_temperature_K, color="C3", linestyle="--", linewidth=1.0)
+    _ax_field.set_xlabel(r"$T$ (K)")
+    _ax_field.set_ylabel(r"common $|H|_\mathrm{max}$ (A m$^{-1}$)")
+    _ax_field.grid(True, which="major", alpha=0.25)
+    _ax_field.minorticks_on()
+    _ax_field.grid(True, which="minor", alpha=0.10)
+
+    save_figure(_fig_acq, "curie_acquisition_qc")
+    _fig_acq
     return
 
 
@@ -1896,17 +2026,28 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
 
     **Cross-check: mean-field $T_c$ on run `first`.**
     The $M_0^2(T)\propto T_c-T$ form is a near-$T_c$ approximation.
-    Our iterative narrow-window ODR fit gives $T_c^\mathrm{{MF}}={Tc_K:.1f}$ K
-    with $\chi^2/\nu={odr_result.redchi:.1f}$; the linear form does not
-    describe the in-window data, so the Birge-rescaled error bar
-    ($\pm{sigma_Tc_K:.0f}$ K) is too wide to be informative as an
-    independent estimator. The gap to the headline,
-    $|T_c^\mathrm{{MF}}-T_c^\mathrm{{hh}}|={mf_shift_display:.1f}\,\mathrm{{K}}$,
-    reflects the bias of the mean-field linear approximation rather
-    than a systematic on the half-height result, and is therefore
-    *not* added to the systematic budget. The mean-field number is
-    kept here only as a qualitative cross-check showing that both
-    estimator families place $T_c$ in the same ~210-230 K region.
+    With the $p$-value $K$-scan selecting the optimal linear window,
+    the ODR fit gives $T_c^\mathrm{{MF}}={Tc_K:.1f}\pm{sigma_Tc_K:.1f}\,\mathrm{{K}}$
+    ($\chi^2/\nu={odr_result.redchi:.2f}$, Birge-rescaled). This sits
+    ${mf_shift_display:.0f}\,\mathrm{{K}}$ above the half-height headline
+    and the Curie–Weiss paramagnetic-side estimate (both at $\sim$213–217 K).
+    Two readings of the disagreement:
+
+    - *Mean-field is the wrong model for this data.* Half-height
+      (model-free) and Curie–Weiss (paramagnetic side) agree at
+      $\sim$213–217 K from independent inputs; the $M_0^2$ extrapolation
+      is sensitive to bias in the saturation-tail intercept $M_0$
+      itself, which can pull $T_c^\mathrm{{MF}}$ upward systematically.
+    - *Half-height is biased low by broadening.* A composition-broadened
+      transition (Monel is a Ni–Cu solid solution) places the
+      inflection point well below the true $T_c$ where $M\to0$, and
+      the mean-field extrapolation is then the more physical estimate.
+
+    We cannot decide between these from this run alone, so the
+    mean-field $T_c$ is kept as a methodological cross-check only and
+    is *not* folded into the headline systematic. The headline remains
+    the model-free half-height (corroborated by Curie–Weiss); the gap
+    is reported here verbatim so a reader can apply their own judgement.
 
     **Cross-check: Curie–Weiss $T_c$ from $1/\chi(T)$ above $T_c$.**
     Independently of the half-height (which uses the below-$T_c$ side)
@@ -1936,6 +2077,93 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
         sigma_Tc_headline_stat,
         syst_total,
     )
+
+
+@app.cell
+def _(
+    Tc_CW,
+    Tc_K,
+    Tc_headline,
+    cross_run,
+    diagnostics_with_sigma,
+    np,
+    plt,
+    save_figure,
+    sigma_Tc_CW,
+    sigma_Tc_K,
+    sigma_Tc_headline_stat,
+    syst_total,
+):
+    _fig_tc, _ax_tc = plt.subplots(figsize=(7.6, 4.8), constrained_layout=True)
+
+    if np.isfinite(Tc_headline) and np.isfinite(syst_total):
+        _ax_tc.axhspan(
+            Tc_headline - syst_total,
+            Tc_headline + syst_total,
+            color="C0", alpha=0.08, label=r"headline systematic band",
+        )
+    if np.isfinite(Tc_headline) and np.isfinite(sigma_Tc_headline_stat):
+        _ax_tc.axhspan(
+            Tc_headline - sigma_Tc_headline_stat,
+            Tc_headline + sigma_Tc_headline_stat,
+            color="C0", alpha=0.20, label=r"headline statistical band",
+        )
+        _ax_tc.axhline(Tc_headline, color="C0", linewidth=1.5, label=rf"headline ${Tc_headline:.1f}$ K")
+
+    _x_positions = []
+    _x_labels = []
+    _finite_methods = diagnostics_with_sigma.dropna(subset=["Tc_K"])
+    _method_labels = [r"$M_r$", r"$M_\mathrm{sat}$", r"$M_0$"]
+    for _x, (_, _row) in enumerate(_finite_methods.iterrows()):
+        _ax_tc.errorbar(
+            _x, _row["Tc_K"], yerr=_row["sigma_Tc_K"],
+            fmt="o", color="C0", ecolor="C0", capsize=3, markersize=5,
+            label="run first: methods I-III" if _x == 0 else None,
+        )
+        _x_positions.append(_x)
+        _x_labels.append(_method_labels[_x] if _x < len(_method_labels) else _row["method"])
+
+    _finite_runs = cross_run.dropna(subset=["Tc_K_half"]) if "Tc_K_half" in cross_run.columns else cross_run.iloc[0:0]
+    _start = len(_x_positions) + 1
+    for _j, (_, _row) in enumerate(_finite_runs.iterrows()):
+        _x = _start + _j
+        _ax_tc.errorbar(
+            _x, _row["Tc_K_half"], yerr=_row["sigma_Tc_K_half"],
+            fmt="s", color="C2", ecolor="C2", capsize=3, markersize=5,
+            label=r"cross-run $M_0$ half-height" if _j == 0 else None,
+        )
+        _x_positions.append(_x)
+        _x_labels.append(str(_row["run"]))
+
+    _x = (_x_positions[-1] + 1.4) if _x_positions else 0.0
+    if np.isfinite(Tc_K):
+        _ax_tc.plot(
+            _x, Tc_K, marker="D", color="C3", mfc="white", markersize=5,
+            linestyle="None", label=rf"mean-field cross-check ($\sigma={sigma_Tc_K:.0f}$ K)",
+        )
+        _x_positions.append(_x)
+        _x_labels.append(r"MF")
+        _x += 1.0
+    if np.isfinite(Tc_CW):
+        _ax_tc.errorbar(
+            _x, Tc_CW, yerr=sigma_Tc_CW,
+            fmt="^", color="C4", ecolor="C4", capsize=3, markersize=5,
+            label="Curie-Weiss cross-check",
+        )
+        _x_positions.append(_x)
+        _x_labels.append(r"CW")
+
+    _ax_tc.set_xticks(_x_positions, _x_labels)
+    _ax_tc.set_ylabel(r"transition estimate $T_c$ (K)")
+    _ax_tc.set_title(r"Curie-transition estimates and cross-checks")
+    _ax_tc.grid(True, axis="y", which="major", alpha=0.25)
+    _ax_tc.minorticks_on()
+    _ax_tc.grid(True, axis="y", which="minor", alpha=0.10)
+    _ax_tc.legend(loc="best", fontsize=8)
+
+    save_figure(_fig_tc, "curie_tc_summary")
+    _fig_tc
+    return
 
 
 if __name__ == "__main__":
