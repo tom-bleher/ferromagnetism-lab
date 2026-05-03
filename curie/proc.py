@@ -173,10 +173,17 @@ def _(DATA_FILE, DATA_XLSX, mo, np, pd, read_table):
     Ry = 3.97e3
     C = 19.78e-6
     L = float(apparatus["L (m)"])    # placeholder: rod-in-solenoid geometry
-    Rx = float(apparatus["Rx (Ω)"])  # placeholder: primary R is variable
     A = float(apparatus["A (m²)"])   # placeholder: rod cross-section
 
-    H_PER_X = N1 / (L * Rx)
+    # The user measured the primary AC current (RMS) with an ammeter for each run,
+    # bypassing the unknown/variable Rx.
+    I_rms = 1.97  # Ampere (Measurement 1 for the 'first' run)
+    I_peak = I_rms * np.sqrt(2)
+    # The max LabVIEW voltage X_max corresponds to I_peak.
+    X_max = np.max([data[xp].max() for xp in X_POS])
+    effective_Rx = X_max / I_peak
+    H_PER_X = N1 / (L * effective_Rx)
+
     B_PER_Y = Ry * C / (N2 * A)
 
     # Per-loop temperature uncertainty. T is logged once per loop, but
@@ -1275,14 +1282,14 @@ def _(
     _Ry = 3.97e3
     _C = 19.78e-6
     _L = float(_apparatus["L (m)"])
-    _Rx = float(_apparatus["Rx (Ω)"])
     _A = float(_apparatus["A (m²)"])
-    _H_per_X = _N1 / (_L * _Rx)
     _B_per_Y = _Ry * _C / (_N2 * _A)
+    
+    _I_rms_dict = {"first": 1.97, "second": 2.24, "third": 0.65}
 
-    def _branches(row, xp, yp, xn, yn):
-        H_p = _H_per_X * row[xp].to_numpy(float)
-        H_n = _H_per_X * row[xn].to_numpy(float)
+    def _branches(row, xp, yp, xn, yn, h_per_x):
+        H_p = h_per_x * row[xp].to_numpy(float)
+        H_n = h_per_x * row[xn].to_numpy(float)
         B_p = _B_per_Y * row[yp].to_numpy(float)
         B_n = _B_per_Y * row[yn].to_numpy(float)
         return H_p, B_p / MU0 - H_p, H_n, B_n / MU0 - H_n
@@ -1324,9 +1331,16 @@ def _(
         sT = np.abs(np.gradient(T_K, t_s)) * dt_loop / np.sqrt(12.0)
         sT = np.sqrt(sT**2 + (1e-3 / np.sqrt(12.0)) ** 2)
 
+        run_name = path.parent.name
+        I_rms = _I_rms_dict.get(run_name, 1.97)
+        I_peak = I_rms * np.sqrt(2)
+        X_max = np.max([df[c].max() for c in xp])
+        effective_Rx = X_max / I_peak
+        h_per_x = _N1 / (_L * effective_Rx)
+
         hmax = np.array([
-            min(float(_H_per_X * df.iloc[i][xp].to_numpy(float).max()),
-                float(-_H_per_X * df.iloc[i][xn].to_numpy(float).min()))
+            min(float(h_per_x * df.iloc[i][xp].to_numpy(float).max()),
+                float(-h_per_x * df.iloc[i][xn].to_numpy(float).min()))
             for i in range(len(df))
         ])
         plateau = float(np.median(hmax[len(hmax) // 2:]))
@@ -1341,7 +1355,7 @@ def _(
         bg_mask = T_K[keep] >= np.quantile(T_K[keep], 0.75)
         Hb, Mb = [], []
         for i in keep[bg_mask]:
-            Hp, Mp, Hn, Mn = _branches(df.iloc[i], xp, yp, xn, yn)
+            Hp, Mp, Hn, Mn = _branches(df.iloc[i], xp, yp, xn, yn, h_per_x)
             Hb.extend([Hp, Hn])
             Mb.extend([Mp, Mn])
         a_bg, b_bg = np.polyfit(np.concatenate(Hb), np.concatenate(Mb), 1)
@@ -1351,7 +1365,7 @@ def _(
         T_used = np.zeros(len(keep))
         sT_used = np.zeros(len(keep))
         for k, i in enumerate(keep):
-            Hp, Mp, Hn, Mn = _branches(df.iloc[i], xp, yp, xn, yn)
+            Hp, Mp, Hn, Mn = _branches(df.iloc[i], xp, yp, xn, yn, h_per_x)
             Mp_c = Mp - (a_bg * Hp + b_bg)
             Mn_c = Mn - (a_bg * Hn + b_bg)
             bp, sp = _tail_intercept(Hp, Mp_c, "pos")
