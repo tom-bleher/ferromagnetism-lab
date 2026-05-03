@@ -1171,9 +1171,20 @@ def _(
 
     scale = 1e6  # (A/m)^2 -> (kA/m)^2
 
+    # Bound the visible region to the meaningful transition window:
+    # x goes from ~10 K below the half-height headline up to a few K
+    # past the mean-field Tc; y reaches just high enough to show the
+    # curving low-T tail that motivates the K-scan rejection without
+    # being dominated by the deep-T spike.
+    _T_in = T_all[fit_mask]
+    _x_lo = (Tc_headline - 10.0) if np.isfinite(Tc_headline) else float(_T_in.min()) - 10.0
+    _x_hi = Tc_K + 5.0
+    _y_curve_max = float(M0_sq_all[(T_all >= _x_lo) & ~fit_mask].max() / scale) if (~fit_mask).any() else 1.0
+    _y_hi = max(0.5, 1.05 * min(_y_curve_max, 5.0))  # cap visible curve at ~5 kA^2/m^2
+    _y_lo = -0.05 * _y_hi
+
     # Shade the K-scan fit window in T so the reader can see at a
     # glance which points fed the line.
-    _T_in = T_all[fit_mask]
     if _T_in.size:
         ax_msq.axvspan(
             float(_T_in.min()), float(_T_in.max()),
@@ -1204,14 +1215,8 @@ def _(
     ax_msq.axhline(0, color="0.4", linewidth=0.6, linestyle="--")
     ax_msq.axvline(Tc_K, color="C3", linewidth=0.8, linestyle=":")
 
-    # Restrict the visible y-range to the near-Tc data so the fit and
-    # its uncertainty band are readable, instead of being squashed by
-    # the deep-T M_0^2 values that the fit deliberately excludes.
-    _y_max_fit = float(M0_sq_all[fit_mask].max() / scale)
-    ax_msq.set_ylim(-0.10 * _y_max_fit, 1.4 * _y_max_fit)
-    ymin, ymax = ax_msq.get_ylim()
     ax_msq.fill_betweenx(
-        [ymin, ymax], Tc_K - sigma_Tc_K, Tc_K + sigma_Tc_K,
+        [_y_lo, _y_hi], Tc_K - sigma_Tc_K, Tc_K + sigma_Tc_K,
         color="C3", alpha=0.10,
     )
 
@@ -1221,7 +1226,8 @@ def _(
             label=rf"half-height headline $T_c={Tc_headline:.1f}\pm{sigma_Tc_headline_stat:.2f}\,\mathrm{{K}}$",
         )
 
-    ax_msq.set_ylim(ymin, ymax)
+    ax_msq.set_xlim(_x_lo, _x_hi)
+    ax_msq.set_ylim(_y_lo, _y_hi)
     ax_msq.set_xlabel(r"$T$ (K)")
     ax_msq.set_ylabel(r"$M_0^2$ (kA$^2\,$m$^{-2}$)")
     ax_msq.set_title(r"Mean-field $M_0^2(T)$ fit (Method III cross-check)")
@@ -1846,17 +1852,36 @@ def _(
     _inv_chi_all = 1.0 / chi_vals[_good]
     _sigma_inv_all = sigma_chi_vals[_good] / chi_vals[_good] ** 2
 
+    _used = mask_CW[_good]
+
+    # Auto-bound axes to the fit-window data: x covers the paramagnetic
+    # regime plus a few K of context; y covers the in-window 1/chi
+    # range with margin. Without this, a single near-Tc loop where chi
+    # happens to be tiny gives a huge 1/chi outlier that dominates the
+    # vertical scale and visually drowns the linear fit.
     _edge = Tc_seed_CW + CW_BUFFER_K
+    if _used.any():
+        _y_in = _inv_chi_all[_used]
+        _y_med = float(np.median(_y_in))
+        _y_iqr = float(np.percentile(_y_in, 90) - np.percentile(_y_in, 10))
+        _y_hi = _y_med + 3.0 * max(_y_iqr, abs(_y_med))
+        _y_lo = min(0.0, _y_med - 1.0 * max(_y_iqr, abs(_y_med)))
+        _x_lo = _edge - 5.0
+        _x_hi = float(_T_all[_used].max()) + 3.0
+    else:
+        _y_lo, _y_hi = -1.0, 1.0
+        _x_lo = float(_T_all.min()) - 2.0
+        _x_hi = float(_T_all.max()) + 5.0
+
     ax_cw.axvspan(
-        float(_T_all.min()) - 5.0, _edge,
-        color="0.85", alpha=0.35, zorder=0,
+        _x_lo, _edge, color="0.85", alpha=0.35, zorder=0,
         label=rf"excluded ($T \leq T_c^\mathrm{{seed}}+{CW_BUFFER_K:.0f}\,\mathrm{{K}}$)",
     )
 
-    _used = mask_CW[_good]
-    if (~_used).any():
+    _excl = ~_used
+    if _excl.any():
         ax_cw.errorbar(
-            _T_all[~_used], _inv_chi_all[~_used], yerr=_sigma_inv_all[~_used],
+            _T_all[_excl], _inv_chi_all[_excl], yerr=_sigma_inv_all[_excl],
             fmt="o", color="0.55", markersize=2.8, elinewidth=0.6,
             alpha=0.7,
         )
@@ -1868,22 +1893,24 @@ def _(
         )
 
     if cw_result is not None and np.isfinite(Tc_CW):
-        _T_line = np.linspace(Tc_CW, float(_T_all.max()) + 5.0, 200)
+        _T_line = np.linspace(max(Tc_CW, _x_lo), _x_hi, 200)
         ax_cw.plot(
             _T_line, m_CW * _T_line + b_CW, "-", color="C3", linewidth=2.0,
             label=rf"Curie–Weiss $T_c={Tc_CW:.1f}\pm{sigma_Tc_CW:.1f}\,\mathrm{{K}}$",
         )
-        ax_cw.axvline(Tc_CW, color="C3", linewidth=0.8, linestyle=":")
+        if _x_lo <= Tc_CW <= _x_hi:
+            ax_cw.axvline(Tc_CW, color="C3", linewidth=0.8, linestyle=":")
 
     ax_cw.axhline(0, color="0.4", linewidth=0.6, linestyle="--")
-    ax_cw.set_xlim(float(_T_all.min()) - 2.0, float(_T_all.max()) + 5.0)
+    ax_cw.set_xlim(_x_lo, _x_hi)
+    ax_cw.set_ylim(_y_lo, _y_hi)
     ax_cw.set_xlabel(r"$T$ (K)")
     ax_cw.set_ylabel(r"$1/\chi$ (arb. units)")
     ax_cw.set_title(r"Curie–Weiss $1/\chi(T)$ above $T_c$ (Method IV cross-check)")
     ax_cw.minorticks_on()
     ax_cw.grid(True, which="major", alpha=0.25)
     ax_cw.grid(True, which="minor", alpha=0.10)
-    ax_cw.legend(loc="lower right", fontsize=8, framealpha=0.95)
+    ax_cw.legend(loc="upper left", fontsize=8, framealpha=0.95)
 
     save_figure(fig_cw, "curie_method4_curie_weiss")
     fig_cw
@@ -2178,6 +2205,25 @@ def _(
             0.5 * (_b + _next_a), color="0.85", linewidth=0.8,
             linestyle=":", zorder=0,
         )
+
+    # Bound y to the region populated by point estimates. Method-IV
+    # CW's ~93 K Birge-rescaled errorbar would otherwise stretch the
+    # axis past the science region; matplotlib will draw it but clip
+    # the bar at the axis edge, which is acceptable since the legend
+    # quotes the value and the markdown reports the full number.
+    _all_centers = []
+    for _, _r in _finite_methods.iterrows():
+        _all_centers.append(float(_r["Tc_K"]))
+    for _, _r in _finite_runs.iterrows():
+        _all_centers.append(float(_r["Tc_K_half"]))
+    if np.isfinite(Tc_K):
+        _all_centers.append(float(Tc_K))
+    if np.isfinite(Tc_CW):
+        _all_centers.append(float(Tc_CW))
+    if _all_centers:
+        _y_lo = min(_all_centers + [Tc_headline - syst_total]) - 5.0
+        _y_hi = max(_all_centers + [Tc_K + sigma_Tc_K]) + 5.0
+        _ax_tc.set_ylim(_y_lo, _y_hi)
 
     _ax_tc.set_xticks(_x_positions, _x_labels)
     _ax_tc.set_ylabel(r"$T_c$ (K)")
