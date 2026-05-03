@@ -53,6 +53,8 @@ def _():
     from matplotlib.lines import Line2D
     from scipy.signal import savgol_filter
 
+    from taulab import read_table
+
     plt.rcParams.update({
         "figure.figsize": (7.2, 4.5),
         "figure.dpi": 120,
@@ -104,15 +106,16 @@ def _():
         np,
         pd,
         plt,
+        read_table,
         save_figure,
         savgol_filter,
     )
 
 
 @app.cell
-def _(DATA_FILE, DATA_XLSX, mo, pd):
+def _(DATA_FILE, DATA_XLSX, mo, pd, read_table):
     data = pd.read_csv(DATA_FILE, sep="\t")
-    apparatus = pd.read_excel(DATA_XLSX, sheet_name="apparatus").iloc[0]
+    apparatus = read_table(DATA_XLSX, sheet_name="apparatus").iloc[0]
     temperature_K = data["Temperature (C)"] + 273.15
 
     X_POS = [c for c in data.columns if c.startswith("X_pos")]
