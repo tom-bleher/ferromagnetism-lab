@@ -3,3 +3,4 @@ __pycache__/
 __marimo__/
 layouts/
 CLAUDE.md
+.vscode/
