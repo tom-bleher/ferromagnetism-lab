@@ -259,6 +259,18 @@ def _(
 def _(mo):
     mo.md(r"""
     ## Part A — Initial magnetization curve $B(H)$ and $\mu_r(H)$
+
+    **Scope of Part A.** The data captured here is a 13-row table of
+    $(\Delta V_x, \Delta V_y)$ peak-to-peak readings, one per primary
+    drive level. Each row characterizes a single Lissajous loop by its
+    *peak-to-peak extent* (top-bottom and left-right excursion on the
+    XY display); the loop trajectory itself was not exported. From
+    these readings we can extract $B_{\text{peak}}$, $H_{\text{peak}}$,
+    $\mu_r(H)$, and the saturation $B$-value, but **not** the
+    remanence $B_r=B(H=0)$, the coercivity $H_c=H$ at $B=0$, or the
+    hysteresis-loop area (energy loss per cycle). Those would require
+    sampling the full loop (XY-mode waveform export, as the Curie
+    experiment does). This is a known scope-of-data limitation.
     """)
     return
 
@@ -536,6 +548,87 @@ def _(FIG_DIR, RUNS, fits, np, plt):
     fig2.savefig(FIG_DIR / 'fig_copper_gap.pdf', bbox_inches='tight')
     fig2.savefig(FIG_DIR / 'fig_copper_gap.png', bbox_inches='tight', dpi=600)
     fig2
+    return
+
+
+@app.cell(hide_code=True)
+def _(MU0_THEO, RUNS, fits, mo, np):
+    # μ_0 sensitivity sweep. The experimental result μ_0^exp = 1/(K·slope),
+    # with K = N²A/(R_x R_y C). The log-derivatives are exact:
+    #
+    #   d ln μ_0 / d ln N   = -2     d ln μ_0 / d ln R_x = +1
+    #   d ln μ_0 / d ln A   = -1     d ln μ_0 / d ln R_y = +1
+    #   d ln μ_0 / d ln C   = +1     d ln μ_0 / d ln L'  = +1
+    #
+    # (L' enters via the fit's x-axis: slope ∝ 1/L' in dimensional terms,
+    # so any global rescaling of L' propagates with sign +1 into μ_0.)
+    #
+    # If μ_0^exp / μ_0^CODATA = ratio < 1, the fractional shift the model
+    # has to explain in *each* quantity (acting alone) to bring the
+    # measurement back to CODATA is:
+    #
+    #     ε_i = (1/ratio - 1) / s_i,
+    #
+    # where s_i is the log-derivative above. Smaller |ε| means a smaller
+    # systematic in that quantity is sufficient to wipe out the bias —
+    # i.e. that quantity is the most likely culprit.
+    sens = {
+        "N":  -2.0,
+        "A":  -1.0,
+        "R_x": +1.0,
+        "R_y": +1.0,
+        "C":   +1.0,
+        "L'":  +1.0,
+    }
+
+    rows = ["| run | quantity | $d\\ln\\mu_0/d\\ln X$ | shift in $X$ to recover CODATA |",
+            "|---|---|---:|---:|"]
+    for sheet, f in fits.items():
+        ratio = f["mu0_exp"].value / MU0_THEO
+        delta = (1.0 / ratio) - 1.0  # fractional change in μ_0 needed
+        label = RUNS[sheet]["label"]
+        for q, s in sens.items():
+            eps = delta / s
+            rows.append(f"| {label} | ${q}$ | {s:+.0f} | {eps*100:+.1f}% |")
+
+    table_md = "\n".join(rows)
+    mo.md(rf"""
+    ### $\mu_0$ sensitivity sweep — which apparatus constant could explain the bias?
+
+    Each row shows the fractional change in one apparatus constant that
+    would, *acting alone*, restore $\mu_0^\mathrm{{exp}}$ to its CODATA
+    value. Quantities listed with the smallest required shift are the
+    most likely systematic culprits given the calibration uncertainty
+    budget on the previous table.
+
+    {table_md}
+
+    Reading the table against the apparatus uncertainty budget:
+
+    - $N=250$ is a count; no uncertainty. A 21 % miscount is implausible.
+    - $A$: budgeted at 1.0 %. To explain a 30–35 % bias on its own,
+      the cross-section would need to be 23 cm² instead of 16 cm² —
+      far outside the budget.
+    - $R_x$, $R_y$, $C$: budgeted below 0.2 %. Off-by-30 % is
+      not credible for any of them in isolation. (The film capacitor
+      $C$ is the loosest of the three by typical-tolerance arguments,
+      but its measured value is closer to its nominal than the bias
+      requires.)
+    - $L'$: budgeted at $\sim$15 µm absolute, which is 3–14 % relative
+      depending on the plate count. Two effects compound: (i) the
+      caliper LSD itself is appreciable on a 0.10 mm plate, and (ii)
+      copper plates may stick or include burrs that bias the *effective*
+      gap larger than nominal. **A coherent +30 % bias on $L'$ would
+      explain the entire $\mu_0$ shortfall** — and is the only entry
+      whose required shift is comparable to its plausible systematic
+      range.
+
+    Conclusion: the dominant systematic is most plausibly the effective
+    copper-plate gap $L'$ (geometric thickness vs effective magnetic
+    gap including mounting/contact effects), with the core cross-section
+    $A$ as a secondary candidate. $R_x$, $R_y$, $C$, and $N$ are
+    individually too tightly constrained to be primary suspects.
+    """)
     return
 
 

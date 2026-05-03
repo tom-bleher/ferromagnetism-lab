@@ -143,15 +143,30 @@ def _(DATA_FILE, DATA_XLSX, mo, np, pd, read_table):
     X_NEG = [c for c in data.columns if c.startswith("X_neg")]
     Y_NEG = [c for c in data.columns if c.startswith("Y_neg")]
 
-    N = int(apparatus["N"])
-    L = float(apparatus["L (m)"])
-    Rx = float(apparatus["Rx (Ω)"])
-    Ry = float(apparatus["Ry (Ω)"])
-    C = float(apparatus["C (F)"])
-    A = float(apparatus["A (m²)"])
+    # The Curie rig is NOT the hysteresis toroid. Per the lab schematic
+    # (references/official-guides/IMG_2270.jpeg), the Curie circuit has
+    # a 1:10 step-up secondary and a different integrator:
+    #   N1 = 250 (primary, drives H),    N2 = 2500 (integrator side -> B)
+    #   R2 = 3.97 kΩ (Ry),  C = 19.78 µF
+    #   R1 = 0.15 .. 2 Ω variable (Rx)
+    # L (solenoid length over the Monel rod) and A (rod cross-section)
+    # are not on the schematic; the hysteresis-sheet values below are
+    # placeholders so the absolute axes are dimensionally consistent.
+    # *** None of these enter T_c. *** Methods 1-3 locate the temperature
+    # at which M(T) crosses a normalized threshold, so any common
+    # multiplicative rescaling of M (or H) leaves T_c invariant. The
+    # override is here so the diagnostic plots (M in A/m, H in A/m)
+    # reflect the Curie circuit rather than the toroid circuit.
+    N1 = 250
+    N2 = 2500
+    Ry = 3.97e3
+    C = 19.78e-6
+    L = float(apparatus["L (m)"])    # placeholder: rod-in-solenoid geometry
+    Rx = float(apparatus["Rx (Ω)"])  # placeholder: primary R is variable
+    A = float(apparatus["A (m²)"])   # placeholder: rod cross-section
 
-    H_PER_X = N / (L * Rx)
-    B_PER_Y = Ry * C / (N * A)
+    H_PER_X = N1 / (L * Rx)
+    B_PER_Y = Ry * C / (N2 * A)
 
     # Per-loop temperature uncertainty. T is logged once per loop, but
     # each loop is acquired over a finite window dt_loop (~5.6 s here)
@@ -170,22 +185,27 @@ def _(DATA_FILE, DATA_XLSX, mo, np, pd, read_table):
     _T_LSD = 1e-3
     sigma_T_K = np.sqrt(sigma_T_smear**2 + (_T_LSD / np.sqrt(12.0)) ** 2)
 
-    mo.md(f"""
+    mo.md(rf"""
     **Loaded data**
 
     - rows: `{len(data)}` loops
     - samples per branch: `{len(X_POS)}`
     - temperature range: `{temperature_K.min():.3f}` to `{temperature_K.max():.3f}` K
     - calibration constants: `H/Vx = {H_PER_X:.6g} A m^-1 V^-1`, `B/Vy = {B_PER_Y:.6g} T V^-1`
-    - loop window: `{_dt_loop:.2f}` s; per-loop $\\sigma_T$ in transition region (median, p95): `{np.median(sigma_T_K):.3f}`, `{np.percentile(sigma_T_K, 95):.3f}` K
+    - loop window: `{_dt_loop:.2f}` s; per-loop $\sigma_T$ in transition region (median, p95): `{np.median(sigma_T_K):.3f}`, `{np.percentile(sigma_T_K, 95):.3f}` K
 
-    The calibration uses the existing apparatus constants from `../ferromagnetism/data/data.xlsx`; update `Rx`, `R`, `C`, `L`, or `A` there if the Curie run used different values.
+    The Curie circuit constants are hard-coded to match the lab schematic
+    ($N_1=250$ primary, $N_2=2500$ secondary, $R_y=3.97\,\mathrm{{k\Omega}}$,
+    $C=19.78\,\mu\mathrm{{F}}$). $L$, $R_x$, and $A$ are pulled from
+    `../ferromagnetism/data/data.xlsx` only as placeholders — the Curie
+    run uses a rod-in-solenoid geometry, not the toroid, but the
+    diagnostic plots depend on these only through linear rescalings.
 
     **Why apparatus uncertainties are not propagated here**: the Curie
     methods all locate the temperature where $M(T)$ vanishes. Any common
-    rescaling of $M$ (from $N$, $L$, $R_x$, $R_y$, $C$, $A$) leaves the
-    $T$-axis intercept unchanged, so the Part-A apparatus-constant budget
-    cancels in $T_c$ and is intentionally not carried in this notebook.
+    rescaling of $M$ (from $N_1$, $N_2$, $L$, $R_x$, $R_y$, $C$, $A$)
+    leaves the $T$-axis intercept unchanged, so the apparatus-constant
+    budget cancels in $T_c$ and is intentionally not carried here.
     """)
     return B_PER_Y, H_PER_X, X_NEG, X_POS, Y_NEG, Y_POS, data, sigma_T_K
 
@@ -327,15 +347,39 @@ def _(
             return np.argsort(H_arr)
         raise ValueError(f"tail must be 'pos' or 'neg', got {tail!r}")
 
-    def _linear_intercept(h, m):
+    def _linear_fit(h, m):
+        # Returns intercept, sigma_intercept, slope, sigma_slope.
         coeffs, cov = np.polyfit(h, m, 1, cov=True)
-        return float(coeffs[1]), float(np.sqrt(cov[1, 1]))
+        return (
+            float(coeffs[1]),
+            float(np.sqrt(cov[1, 1])),
+            float(coeffs[0]),
+            float(np.sqrt(cov[0, 0])),
+        )
 
-    def sat_intercept(H, M, tail, n_min=5, n_max_frac=0.5, intercept_tol_sigma=2.0):
+    def _linear_intercept(h, m):
+        b, sb, _, _ = _linear_fit(h, m)
+        return b, sb
+
+    def sat_intercept(
+        H, M, tail,
+        n_min=5,
+        n_max_frac=0.5,
+        intercept_tol_sigma=2.0,
+        slope_tol_sigma=2.0,
+    ):
         # On the saturated tail, M(H) ~= M0 + chi_bg * H. Grow the window
         # from n_min outward (ranked by tail-side |H|) and freeze it once
-        # the intercept shifts more than intercept_tol_sigma * sigma_prev
-        # — i.e. the linear regime has ended.
+        # either gate trips:
+        #   (a) intercept shifts > intercept_tol_sigma * sigma_b_prev
+        #       -- i.e. the apparent M_0 has started to drift;
+        #   (b) slope shifts > slope_tol_sigma * sigma_a_prev -- i.e.
+        #       chi_bg is no longer locally constant, signalling that
+        #       the new point is leaving the linear/saturated regime
+        #       (typical when expansion reaches the remanence shoulder).
+        # Without (b), the original code could absorb shoulder points
+        # into the fit as long as their *intercept* happened to look
+        # stable, biasing M_0 low. The slope check trips earlier.
         H_arr = np.asarray(H, dtype=float)
         M_arr = np.asarray(M, dtype=float)
         order = _tail_order(H_arr, tail)
@@ -343,17 +387,23 @@ def _(
         n_total = len(H_sorted)
         n_max = min(n_total, max(n_min + 1, int(n_max_frac * n_total)))
 
-        intercept, sigma = _linear_intercept(H_sorted[:n_min], M_sorted[:n_min])
+        intercept, sigma_b, slope, sigma_a = _linear_fit(
+            H_sorted[:n_min], M_sorted[:n_min]
+        )
         n_used = n_min
         for n in range(n_min + 1, n_max + 1):
             try:
-                intercept_new, sigma_new = _linear_intercept(H_sorted[:n], M_sorted[:n])
+                b_new, sb_new, a_new, sa_new = _linear_fit(
+                    H_sorted[:n], M_sorted[:n]
+                )
             except (np.linalg.LinAlgError, ValueError):
                 break
-            if abs(intercept_new - intercept) > intercept_tol_sigma * max(sigma, 1e-30):
+            if abs(b_new - intercept) > intercept_tol_sigma * max(sigma_b, 1e-30):
                 break
-            intercept, sigma, n_used = intercept_new, sigma_new, n
-        return intercept, sigma, n_used
+            if abs(a_new - slope) > slope_tol_sigma * max(sigma_a, 1e-30):
+                break
+            intercept, sigma_b, slope, sigma_a, n_used = b_new, sb_new, a_new, sa_new, n
+        return intercept, sigma_b, n_used
 
     def sat_intercept_fixed(H, M, tail, n=5):
         # Instructor's strict n-point fit, kept alongside the adaptive
@@ -382,9 +432,16 @@ def _(
 def _(TEMPERATURE_K, branches_for_row, data, np):
     # Above the transition the remaining response is treated as the linear
     # field-induced/background part and subtracted before extracting M(T).
-    high_temperature_mask = TEMPERATURE_K >= 273.15
-    if high_temperature_mask.sum() < 5:
-        high_temperature_mask = TEMPERATURE_K >= np.quantile(TEMPERATURE_K, 0.9)
+    # The previous code used T >= 273.15 K (room temperature) as the
+    # paramagnetic-regime cutoff. That implicitly assumes T_c is near room
+    # temperature — fine for bulk Fe but wrong here: the Monel sample sits
+    # at T_c ~ 212 K and the data range tops out near 280 K, so the
+    # 273.15 K cut grabbed only a handful of loops at the extreme tail
+    # while ignoring plenty of equally-paramagnetic loops at 220-270 K.
+    # We instead fit chi_bg on the highest-T quartile (top 25 %), which
+    # for any sample with T_c well below the run's T_max sits comfortably
+    # in the paramagnetic regime. This is robust to the unknown T_c.
+    high_temperature_mask = TEMPERATURE_K >= np.quantile(TEMPERATURE_K, 0.75)
 
     _H_background, _M_background = [], []
     for _, _row in data.loc[high_temperature_mask].iterrows():
@@ -412,7 +469,7 @@ def _(background_intercept, background_slope, high_temperature_mask, mo):
     mo.md(rf"""
     **Background removal**
 
-    The guide notes that above $T_c$ the sample still has field-induced magnetization. For this sketch, the high-temperature rows (`T >= 273.15 K`, `{int(high_temperature_mask.sum())}` loops) are fit to
+    The guide notes that above $T_c$ the sample still has field-induced magnetization. We fit $\chi_\mathrm{{bg}}$ on the highest-T quartile (`{int(high_temperature_mask.sum())}` loops) so the choice is robust to the unknown $T_c$ — every loop in this quartile sits well above the transition for any sample with $T_c$ below the run's maximum temperature. The fit form is
 
     $$
     M_\mathrm{{bg}}(H)=aH+b.
@@ -701,6 +758,15 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, summary):
     sM0_sq_all = 2.0 * np.abs(M0_all) * sM0_all
 
     FIT_HALFWIDTH_K = 25.0  # mean-field linear regime is only ~10-30 K wide.
+    # Margin on the +T side. Strict mean-field has M^2 = 0 above Tc, so
+    # any data above Tc that survives the M0>0 + SNR>3 filters is upward
+    # noise — including it tilts the linear fit and pulls Tc above its
+    # true value. We keep a small +2 K margin so a couple of marginal
+    # points right at the transition stay in (giving the fit some
+    # leverage on the intercept) but no further. (Empirically widening
+    # this to +10 K drives chi^2/nu from ~50 to ~230 and shifts the
+    # mean-field Tc by 20 K — confirming +2 K is the principled choice.)
+    FIT_UPPER_MARGIN_K = 2.0
 
     # Seed Tc from the half-height bootstrap on the normalized M_0 curve.
     _seed_row = diagnostics_with_sigma.iloc[2]  # method "3. M_0 norm (half-height)"
@@ -712,7 +778,7 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, summary):
     Tc_iter = _Tc_seed
     odr_result = None
     for _ in range(5):
-        in_window = (T_all >= Tc_iter - FIT_HALFWIDTH_K) & (T_all <= Tc_iter + 2.0)
+        in_window = (T_all >= Tc_iter - FIT_HALFWIDTH_K) & (T_all <= Tc_iter + FIT_UPPER_MARGIN_K)
         fit_mask = in_window & (M0_all > 0) & (snr > 3.0)
         if fit_mask.sum() < 5:
             order_T = np.argsort(np.abs(T_all - Tc_iter))[:8]
@@ -764,6 +830,7 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, summary):
     Tc_C = Tc_K - 273.15
     return (
         FIT_HALFWIDTH_K,
+        FIT_UPPER_MARGIN_K,
         M0_sq_all,
         Tc_C,
         Tc_K,
@@ -780,7 +847,7 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, summary):
 
 
 @app.cell(hide_code=True)
-def _(FIT_HALFWIDTH_K, Tc_C, Tc_K, fit_mask, mo, odr_result, rescale, sigma_Tc_K, summary):
+def _(FIT_HALFWIDTH_K, FIT_UPPER_MARGIN_K, Tc_C, Tc_K, fit_mask, mo, odr_result, rescale, sigma_Tc_K, summary):
     mo.md(rf"""
     ## Method 3 result: $T_c$ from $M_0^2(T)$ (ODR with errors on both axes)
 
@@ -788,7 +855,7 @@ def _(FIT_HALFWIDTH_K, Tc_C, Tc_K, fit_mask, mo, odr_result, rescale, sigma_Tc_K
     approximation. We seed the fit window from the half-height bootstrap
     $T_c$ on the normalized $M_0$ curve (Methods 1-3 cluster around
     $\sim$210-216 K), keep only data with
-    $T_c-{FIT_HALFWIDTH_K:.0f}\,\mathrm{{K}}\le T\le T_c+2\,\mathrm{{K}}$
+    $T_c-{FIT_HALFWIDTH_K:.0f}\,\mathrm{{K}}\le T\le T_c+{FIT_UPPER_MARGIN_K:.0f}\,\mathrm{{K}}$
     and $M_0/\sigma_{{M_0}}>3$, and iterate the ODR fit a few times
     until $T_c$ stabilises. The fit folds per-loop $\sigma_{{M_0^2}}=2|M_0|\sigma_{{M_0}}$
     on $y$ and the heating-rate smearing $\sigma_T$ on $x$. The fit
@@ -1072,15 +1139,17 @@ def _(
     # so that a bug in the main pipeline does not silently propagate.
     # All locals start with an underscore so marimo treats them as
     # cell-private (no clashes with the main-pipeline names above).
+    # Same Curie-circuit override as the main pipeline (see top cell).
     _apparatus = read_table(DATA_XLSX, sheet_name="apparatus").iloc[0]
-    _N = int(_apparatus["N"])
+    _N1 = 250
+    _N2 = 2500
+    _Ry = 3.97e3
+    _C = 19.78e-6
     _L = float(_apparatus["L (m)"])
     _Rx = float(_apparatus["Rx (Ω)"])
-    _Ry = float(_apparatus["Ry (Ω)"])
-    _C = float(_apparatus["C (F)"])
     _A = float(_apparatus["A (m²)"])
-    _H_per_X = _N / (_L * _Rx)
-    _B_per_Y = _Ry * _C / (_N * _A)
+    _H_per_X = _N1 / (_L * _Rx)
+    _B_per_Y = _Ry * _C / (_N2 * _A)
 
     def _branches(row, xp, yp, xn, yn):
         H_p = _H_per_X * row[xp].to_numpy(float)
@@ -1089,22 +1158,29 @@ def _(
         B_n = _B_per_Y * row[yn].to_numpy(float)
         return H_p, B_p / MU0 - H_p, H_n, B_n / MU0 - H_n
 
-    def _tail_intercept(H, M, tail, n_min=5, frac=0.5, tol=2.0):
+    def _tail_intercept(H, M, tail, n_min=5, frac=0.5, tol_b=2.0, tol_a=2.0):
+        # Mirrors sat_intercept() in the main pipeline: gate window
+        # expansion on BOTH intercept and slope stability so the fit
+        # can't silently drift into the remanence shoulder.
         order = np.argsort(-H) if tail == "pos" else np.argsort(H)
         h, m = H[order], M[order]
         n_max = min(len(h), max(n_min + 1, int(frac * len(h))))
         co, cov = np.polyfit(h[:n_min], m[:n_min], 1, cov=True)
-        b, s = float(co[1]), float(np.sqrt(cov[1, 1]))
+        b, sb = float(co[1]), float(np.sqrt(cov[1, 1]))
+        a, sa = float(co[0]), float(np.sqrt(cov[0, 0]))
         for n in range(n_min + 1, n_max + 1):
             try:
                 co2, cov2 = np.polyfit(h[:n], m[:n], 1, cov=True)
             except (np.linalg.LinAlgError, ValueError):
                 break
-            b2, s2 = float(co2[1]), float(np.sqrt(cov2[1, 1]))
-            if abs(b2 - b) > tol * max(s, 1e-30):
+            b2, sb2 = float(co2[1]), float(np.sqrt(cov2[1, 1]))
+            a2, sa2 = float(co2[0]), float(np.sqrt(cov2[0, 0]))
+            if abs(b2 - b) > tol_b * max(sb, 1e-30):
                 break
-            b, s = b2, s2
-        return b, s
+            if abs(a2 - a) > tol_a * max(sa, 1e-30):
+                break
+            b, sb, a, sa = b2, sb2, a2, sa2
+        return b, sb
 
     def _run_method3(path):
         df = pd.read_csv(path, sep="\t")
@@ -1130,9 +1206,10 @@ def _(
             return None
         keep = np.arange(int(ready[0]), len(df))
 
-        bg_mask = T_K[keep] >= 273.15
-        if bg_mask.sum() < 5:
-            bg_mask = T_K[keep] >= np.quantile(T_K[keep], 0.9)
+        # Use the top quartile of the kept loops as the paramagnetic
+        # regime; matches the main pipeline's choice and avoids the
+        # T >= 273.15 K cut which assumed T_c near room temperature.
+        bg_mask = T_K[keep] >= np.quantile(T_K[keep], 0.75)
         Hb, Mb = [], []
         for i in keep[bg_mask]:
             Hp, Mp, Hn, Mn = _branches(df.iloc[i], xp, yp, xn, yn)
@@ -1258,13 +1335,36 @@ def _(SIGMA_T_ABS_K, Tc_K, cross_run, diagnostics_with_sigma, mo, np, sigma_Tc_K
     hh_tcs = finite_hh["Tc_K"].to_numpy(dtype=float)
     hh_sigmas = finite_hh["sigma_Tc_K"].to_numpy(dtype=float)
     if len(hh_tcs) > 0:
-        Tc_headline = float(np.average(hh_tcs, weights=1.0 / np.maximum(hh_sigmas, 1e-9) ** 2))
-        sigma_Tc_headline_stat = float(1.0 / np.sqrt(np.sum(1.0 / np.maximum(hh_sigmas, 1e-9) ** 2)))
+        _w = 1.0 / np.maximum(hh_sigmas, 1e-9) ** 2
+        Tc_headline = float(np.average(hh_tcs, weights=_w))
+        sigma_Tc_headline_stat_unrescaled = float(1.0 / np.sqrt(np.sum(_w)))
         method_spread = float(np.std(hh_tcs, ddof=1)) if len(hh_tcs) >= 2 else 0.0
+        # Birge rescaling on the combine. The three half-height methods
+        # disagree by ~7 K while their per-method bootstrap sigmas are
+        # ~0.2-0.3 K, so the inverse-variance combine of independent
+        # estimators is overconfident: chi^2/nu = sum((Tc_i - Tc_avg)^2
+        # / sigma_i^2) / (N-1) is ~100. We multiply the combined sigma
+        # by sqrt(max(chi^2/nu, 1)) to absorb the disagreement into
+        # the *statistical* error bar, which is the standard PDG-style
+        # treatment when methods that should agree don't. The leftover
+        # method-to-method scatter still appears as sigma_method in
+        # the systematic budget below; callers who want the unrescaled
+        # statistical sigma can read sigma_Tc_headline_stat_unrescaled.
+        if len(hh_tcs) >= 2:
+            chi2_combine = float(np.sum((hh_tcs - Tc_headline) ** 2 * _w))
+            dof_combine = len(hh_tcs) - 1
+            redchi_combine = chi2_combine / dof_combine if dof_combine > 0 else 1.0
+        else:
+            redchi_combine = 1.0
+        birge_combine = float(np.sqrt(max(redchi_combine, 1.0)))
+        sigma_Tc_headline_stat = sigma_Tc_headline_stat_unrescaled * birge_combine
     else:
         Tc_headline = float("nan")
+        sigma_Tc_headline_stat_unrescaled = float("nan")
         sigma_Tc_headline_stat = float("nan")
         method_spread = 0.0
+        redchi_combine = float("nan")
+        birge_combine = float("nan")
 
     finite_runs = cross_run.dropna(subset=["Tc_K"]) if "Tc_K" in cross_run.columns else cross_run
     run_tcs = finite_runs["Tc_K"].to_numpy(dtype=float) if not finite_runs.empty else np.array([])
@@ -1304,16 +1404,28 @@ def _(SIGMA_T_ABS_K, Tc_K, cross_run, diagnostics_with_sigma, mo, np, sigma_Tc_K
     **Headline value (model-free, half-height across methods 1, 2, 3-normalized, run `first`):**
 
     $$
-    T_c \;=\; {Tc_headline:.2f} \;\pm\; {sigma_Tc_headline_stat:.2f}_\text{{stat}}
-       \;\pm\; {syst_total:.2f}_\text{{syst}} \;\mathrm{{K}}
-    \;=\; {Tc_headline_C:.2f}^\circ\mathrm{{C}}.
+    T_c \;=\; {Tc_headline:.1f} \;\pm\; {sigma_Tc_headline_stat:.1f}_\text{{stat}}
+       \;\pm\; {syst_total:.1f}_\text{{syst}} \;\mathrm{{K}}
+    \;=\; {Tc_headline_C:.1f}^\circ\mathrm{{C}}.
     $$
+
+    The statistical 1-$\sigma$ on the combined headline has been
+    Birge-rescaled to account for method-to-method disagreement. The
+    raw inverse-variance combine of the three half-height bootstraps
+    gives $\sigma_\text{{stat}}^\text{{raw}}={sigma_Tc_headline_stat_unrescaled:.2f}\,\mathrm{{K}}$,
+    but the three estimates differ by ~7 K — far more than these per-method
+    bootstrap errors allow under the assumption that they sample the
+    same quantity. The combine therefore has $\chi^2/\nu={redchi_combine:.1f}$;
+    we multiply $\sigma_\text{{stat}}$ by $\sqrt{{\chi^2/\nu}}={birge_combine:.1f}$
+    so the quoted statistical bar reflects the actual scatter between
+    methods rather than the unphysically tight per-method bootstrap
+    bands.
 
     The systematic 1-$\sigma$ combines
 
-    - method-to-method spread of the half-height crossings: $\sigma_\text{{method}}={method_spread:.2f}\,\mathrm{{K}}$;
-    - run-to-run spread of the Method-3 mean-field $T_c$ across the three sweeps: $\sigma_\text{{run}}={run_spread:.2f}\,\mathrm{{K}}$;
-    - mean-field-vs-half-height shift: $|T_c^\text{{MF}}-T_c^\text{{hh}}|={mf_shift:.2f}\,\mathrm{{K}}$;
+    - method-to-method spread of the half-height crossings: $\sigma_\text{{method}}={method_spread:.1f}\,\mathrm{{K}}$;
+    - run-to-run spread of the Method-3 mean-field $T_c$ across the three sweeps: $\sigma_\text{{run}}={run_spread:.1f}\,\mathrm{{K}}$;
+    - mean-field-vs-half-height shift: $|T_c^\text{{MF}}-T_c^\text{{hh}}|={mf_shift:.1f}\,\mathrm{{K}}$;
 
     in quadrature.
 
