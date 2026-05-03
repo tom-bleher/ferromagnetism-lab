@@ -537,17 +537,41 @@ def _(
         _Msep = 0.5 * abs(_M_pos_star - _M_neg_star)
         _sigma_Msep = 0.5 * float(np.hypot(_s_pos_star, _s_neg_star))
 
-        # Method 3: extrapolate each saturated tail to H=0. The LabVIEW
-        # table stores the H>=0 half of the upper branch in *_pos and the
-        # H<=0 half of the lower branch in *_neg, so each loop has exactly
-        # two saturation tips: the +H end of _pos (intercept = +M0) and
-        # the -H end of _neg (intercept = -M0). The other ends of each
-        # half are the remanence region, not saturation, and must not be
-        # used here. M0 is the half-difference of the two signed intercepts.
-        _b_pos, _s_pos, _n_pos = sat_intercept(_H_pos, _M_pos, tail="pos")
-        _b_neg, _s_neg, _n_neg = sat_intercept(_H_neg, _M_neg, tail="neg")
-        _bf_pos, _ = sat_intercept_fixed(_H_pos, _M_pos, tail="pos")
-        _bf_neg, _ = sat_intercept_fixed(_H_neg, _M_neg, tail="neg")
+        # Method 3 (per the official guide): "fit a linear approximation
+        # in the saturation regime and extrapolate to H=0".
+        # Algebra (guide page 2):
+        #   in saturation,   M = M_0 + alpha * H
+        #   so               B = M_0 + (alpha + 1) * H,
+        #   i.e.             B - (alpha + 1) * H = M_0.
+        # In SI we already pre-compute M = B/mu_0 - H in branches_for_row,
+        # so a linear fit M(H) = M_0 + alpha * H on the saturation tail
+        # gives M_0 *as the y-intercept* — exactly the "extrapolate the
+        # linear fit to H = 0" prescription.
+        #
+        # The LabVIEW table stores the H>=0 half of the upper branch in
+        # *_pos and the H<=0 half of the lower branch in *_neg, so each
+        # loop has exactly two saturation tips: the +H end of _pos
+        # (linear extrapolation hits the M-axis at +M_0) and the -H end
+        # of _neg (linear extrapolation hits at -M_0). The opposite ends
+        # of each half are the remanence region, not saturation, and
+        # must not be used here. M_0 is the half-difference of the two
+        # signed intercepts; this also cancels any common offset shared
+        # by both branches (e.g. the H-independent piece of the
+        # paramagnetic background).
+        #
+        # We feed the *background-corrected* M into sat_intercept so the
+        # fitted slope alpha = chi_HF (high-field susceptibility, the
+        # guide's alpha) cleanly separates from the universal
+        # paramagnetic background chi_bg fitted earlier; the slope-
+        # stability gate inside sat_intercept then operates on the
+        # material slope and trips when we leave the linear regime.
+        # M_0 itself is invariant under this choice (a_bg, b_bg cancel
+        # in the half-difference), so this is a notational fix; it
+        # matches the cross-run cell.
+        _b_pos, _s_pos, _n_pos = sat_intercept(_H_pos, _M_pos_corr, tail="pos")
+        _b_neg, _s_neg, _n_neg = sat_intercept(_H_neg, _M_neg_corr, tail="neg")
+        _bf_pos, _ = sat_intercept_fixed(_H_pos, _M_pos_corr, tail="pos")
+        _bf_neg, _ = sat_intercept_fixed(_H_neg, _M_neg_corr, tail="neg")
 
         _M0 = 0.5 * (_b_pos - _b_neg)
         _sigma_M0 = 0.5 * float(np.hypot(_s_pos, _s_neg))
@@ -676,26 +700,53 @@ def _(
 
     Here $H_* = {H_STAR:.2f}\,\mathrm{{A\,m^{{-1}}}}$, chosen as half of the common branch-amplitude range $H_\max={common_hmax:.2f}\,\mathrm{{A\,m^{{-1}}}}$ so every retained loop can be interpolated at the same field.
 
-    **Method 3: high-field saturation extrapolation**
+    **Method 3: linear approximation in saturation, extrapolated to $H=0$**
 
-    On the saturated tails of each branch the loop is locally linear,
-    $M(H)\approx M_0(T)+\chi_\mathrm{{bg}}(T)\,H$. A linear fit of $M$ vs
-    $H$ on those tails gives a per-temperature intercept $M_0(T)$ — the
-    spontaneous magnetization, distinct from the remanence
-    $M_r(T)=\frac12|M_+(T,0)-M_-(T,0)|$, which is the memory at $H=0$
-    rather than the saturation extrapolation.
+    Following the official guide: in the saturation regime the loop
+    response is well-approximated as
+
+    $$
+    M(H)=M_0+\alpha H \;\;\Longleftrightarrow\;\;
+    B(H)=M_0+(\alpha+1)H \;\;\Longleftrightarrow\;\;
+    B-(\alpha+1)H=M_0,
+    $$
+
+    so the spontaneous magnetization $M_0(T)$ is recovered *as the
+    intersection of the saturation-tail linear fit with the $H=0$ axis*
+    — i.e. the y-intercept of a straight line fitted to the saturated
+    end of each branch. We fit the linear model $M(H)=M_0+\alpha H$
+    directly (since we already evaluated $M=B/\mu_0-H$), so the fit's
+    intercept *is* $M_0$ and its slope is $\alpha=\chi_\mathrm{{HF}}$
+    (high-field susceptibility). $M_0(T)$ is the spontaneous
+    magnetization, distinct from the remanence $M_r(T)=\frac12|M_+(T,0)-M_-(T,0)|$:
+    $M_r$ is the loop's memory at $H=0$, while $M_0$ is the
+    extrapolation of the saturated branch back to $H=0$.
 
     The fit window is grown adaptively from $n_\mathrm{{min}}=5$ points
-    (the lab guide's prescription) outward; each candidate fit is
-    accepted only if its intercept lies within $2\sigma$ of the previous
-    fit's intercept, otherwise the window is frozen there. The LabVIEW
+    (the lab guide's prescription) outward, ranked by tail-side $|H|$;
+    expansion is frozen when **either** the intercept **or** the slope
+    drifts by more than $2\sigma$ relative to the previous fit, since
+    both signal the end of the linear/saturated regime. The LabVIEW
     export stores the $H\ge0$ half of the upper branch and the $H\le0$
     half of the lower branch, so each loop contributes two saturated
-    tips: the $+H$ end of the upper branch and the $-H$ end of the lower
-    branch. Their signed intercepts give
-    $M_0=\frac12(b^{{(+)}}-b^{{(-)}})$, with uncertainty propagated in
-    quadrature. The instructor's strict 5-point fit is retained
-    alongside as `M0_5pt_A_per_m` for cross-checking.
+    tips: the $+H$ end of the upper branch and the $-H$ end of the
+    lower branch. Their linear extrapolations hit the $M$-axis at
+    $+M_0$ and $-M_0$ respectively, giving
+    $M_0=\frac12(b^{{(+)}}-b^{{(-)}})$ — the half-difference of the
+    two signed intercepts, which automatically cancels any
+    field-independent common offset between the branches. Statistical
+    uncertainty is propagated in quadrature from the per-fit intercept
+    sigmas. The instructor's strict 5-point fit is retained alongside
+    as `M0_5pt_A_per_m` for cross-checking.
+
+    The branches are pre-corrected for the global paramagnetic
+    background (fitted in the high-T cell above) before the saturation
+    fit, so $\alpha$ here is purely the material's high-field
+    susceptibility (the guide's $\alpha$), not the bulk slope. $M_0$
+    itself is invariant under this choice — both the constant and
+    linear pieces of the background cancel in the half-difference of
+    the two branches — but separating $\alpha$ from $\chi_\mathrm{{bg}}$
+    keeps the slope-stability gate physically interpretable.
 
     Methods 1 and 2 are normalized to $[0,1]$ for half-height and
     steepest-slope diagnostics:
