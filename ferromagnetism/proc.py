@@ -25,7 +25,7 @@ def _(mo):
 
     $$H = \frac{N}{2\,L\,R_x}\,\Delta V_x, \qquad B = \frac{R_y\,C}{2\,N\,A}\,\Delta V_y.$$
 
-    Shape-preserving interpolation gives smooth peak-envelope $B(H)$ and
+    A smooth guide curve gives peak-envelope $B(H)$ and
     $\mu_{\mathrm{r}}(H)=\frac{B}{\mu_0 H}$ curves. The full loop trajectory was not
     exported, so this is an envelope measurement rather than a first-branch
     magnetization curve and cannot give $B_r$, $H_c$, or loop area.
@@ -39,6 +39,25 @@ def _(mo):
 
     so a linear fit of $N I/B$ vs $L'$ yields $\mu_0$ from the inverse slope
     and $\mu_\text{iron}$ from the intercept.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Course-style data processing conventions
+
+    Instrument uncertainties use the manufacturer/manual value or the display
+    resolution uncertainty. Independent uncertainty contributions are combined
+    in quadrature, and indirect quantities are propagated by the usual partial
+    derivative rule.
+
+    The copper-gap measurement is the only fitted model in this notebook. For
+    that fit the notebook reports the fit parameters, relative errors,
+    $\chi^2/\nu$, p-probability, DOF, and a residuals plot. The smooth curves in
+    Part A are only guide curves through the measured envelope points; they are
+    not fitted physical models.
     """)
     return
 
@@ -151,11 +170,11 @@ def _(mo):
     | $N$ (turns) | $250$ | — | count given |
     | $L$ (Ampère loop) | $0.48\,\mathrm{m}$ | $\frac{2\sqrt{2}\,\mathrm{mm}}{\sqrt{12}} \approx 0.82\,\mathrm{mm}$ $(0.17\%)$ | two ruler measurements for sides $a,b$ (res $1\,\mathrm{mm}$) and indirect $L = 2(a+b)$: $\sigma_L = 2\sqrt{\sigma_a^2 + \sigma_b^2}$ |
     | $L'$ | per measurement | $\frac{0.05\,\mathrm{mm}}{\sqrt{12}} \approx 14.4\,\mu\mathrm{m}$ | caliper (res $0.05\,\mathrm{mm}$) |
-    | $R_x$ (current-sense) | $2.999\,\mathrm{\Omega}$ | $2.5\,\mathrm{m\Omega}$ $(0.083\%)$ | HP 34401A manual, p. 216: 1-year resistance accuracy on 100 Ω range, $\pm(0.010\%$ reading $+0.004\%$ range$)$ treated as a Type-B rectangular bound, plus $\mathrm{LSD}/\sqrt{12}$ |
-    | $R_y$ (integrator) | $11.10\,\mathrm{k\Omega}$ | $0$ | Treated as an exact calibration constant in this analysis |
+    | $R_x$ (current-sense) | $2.999\,\mathrm{\Omega}$ | $4.3\,\mathrm{m\Omega}$ $(0.14\%)$ | HP 34401A manual, p. 216: 1-year resistance accuracy on 100 Ω range, $\pm(0.010\%$ reading $+0.004\%$ range$)$ used directly as the instrument uncertainty, then combined in quadrature with display resolution$/\sqrt{12}$ |
+    | $R_y$ (integrator) | $11.10\,\mathrm{k\Omega}$ | $0$ | Treated as an exact calibration constant by analysis convention; if measured as an uncertain quantity, it should use the same manufacturer-bound and resolution quadrature rule |
     | $C$ (integrator) | $20.1\,\mu\mathrm{F}$ | $2.0\,\mathrm{nF}$ $(0.01\%)$ | value and uncertainty given |
     | $A$ (core cross-section) | $16.0\,\mathrm{cm^{2}}$ | $A\,\sqrt{2}\,\dfrac{1\,\mathrm{mm}/\sqrt{12}}{40\,\mathrm{mm}} \approx 0.16\,\mathrm{cm^{2}}$ $(1.02\%)$ | two ruler measurements for sides $a,b\approx 4\,\mathrm{cm}$ (res $1\,\mathrm{mm}$) and indirect $A=a\cdot b$: $\sigma_A/A = \sqrt{(\sigma_a/a)^2 + (\sigma_b/b)^2}$ |
-    | $\Delta V_x,\,\Delta V_y$ (scope, dual-cursor) | per measurement | $\sqrt{\left[(0.024\,\lvert V\rvert+5\,\mathrm{mV})/\sqrt{3}\right]^2 + (0.5\,\mathrm{mV}/\sqrt{12})^2}$ | Agilent 7000A data sheet, p. 18: dual-cursor accuracy $=\pm(2.0\%$ vertical gain $+0.4\%$ full scale $+5\,\mathrm{mV})$, treated as a Type-B rectangular bound; full scale approximated by the measured cursor span. The scope voltage resolution is $0.5\,\mathrm{mV}$, therefore $\sigma_{\mathrm{res}}=0.5\,\mathrm{mV}/\sqrt{12}$; total $\sigma_{\Delta V}$ is manufacturer uncertainty and resolution uncertainty combined in quadrature. |
+    | $\Delta V_x,\,\Delta V_y$ (scope, dual-cursor) | per measurement | $\sqrt{\left(0.024\,\lvert V\rvert+5\,\mathrm{mV}\right)^2 + (0.5\,\mathrm{mV}/\sqrt{12})^2}$ | Agilent 7000A data sheet, p. 18: dual-cursor accuracy $=\pm(2.0\%$ vertical gain $+0.4\%$ full scale $+5\,\mathrm{mV})$, used directly as the instrument uncertainty; full scale approximated by the measured cursor span. The scope voltage resolution is $0.5\,\mathrm{mV}$, therefore $\sigma_{\mathrm{res}}=0.5\,\mathrm{mV}/\sqrt{12}$; total $\sigma_{\Delta V}$ is manufacturer uncertainty and resolution uncertainty combined in quadrature. |
     """
     mo.vstack([mo.md("## Uncertainties"), mo.center(mo.md(_budget_md))])
     return
@@ -333,7 +352,7 @@ def _(FIG_DIR, PchipInterpolator, np, plt, pt1):
 
     C_B, C_MU = 'C0', 'C3'
 
-    axB.plot(H_grid, interp_B(H_grid), '-', color=C_B, alpha=0.85, label=r'$B$  PCHIP')
+    axB.plot(H_grid, interp_B(H_grid), '-', color=C_B, alpha=0.85, label=r'$B$  smooth guide')
     axB.errorbar(pt1['H'], pt1['B'],
                  xerr=pt1['sH'], yerr=pt1['sB'],
                  fmt='o', color=C_B, mfc='white', markersize=5,
@@ -347,7 +366,7 @@ def _(FIG_DIR, PchipInterpolator, np, plt, pt1):
     axB.grid(True, which='minor', alpha=0.10)
 
     axMu.plot(Hmu_grid, interp_mu(Hmu_grid), '-', color=C_MU, alpha=0.85,
-              label=r'$\mu_{\mathrm{r}}$  PCHIP')
+              label=r'$\mu_{\mathrm{r}}$  smooth guide')
     axMu.errorbar(pt1['H'], pt1['mu_rel'],
                   xerr=pt1['sH'], yerr=pt1['s_mu_rel'],
                   fmt='s', color=C_MU, mfc='white', markersize=5,
@@ -434,7 +453,7 @@ def _(
     unp,
 ):
     def fit_gap(sheet):
-        r"""ODR :math:`V_x/V_y` vs :math:`L'`; fold :math:`K=N^2A/(R_xR_yC)`
+        r"""Weighted :math:`V_x/V_y` fit vs :math:`L'`; fold :math:`K=N^2A/(R_xR_yC)`
         in after the fit so apparatus σ doesn't dilute by :math:`\sqrt{N}`.
         :math:`\mu_0 = 1/(K \cdot \text{slope})`.
         """
@@ -459,6 +478,7 @@ def _(
         # Each apparatus ufloat keeps its tag, so K's factors stay
         # correctly correlated through the product.
         K = (N ** 2) * A / (Rx * Ry * C)
+        K_nom = K.n
         slope     = PhysicalSize.from_ufloat(K * result.param(1).to_ufloat())
         intercept = PhysicalSize.from_ufloat(K * result.param(0).to_ufloat())
 
@@ -473,6 +493,8 @@ def _(
             mu0_exp=1.0 / slope, mu_iron=L / intercept,
             y_full=unp.nominal_values(NI_B),
             sy_full=unp.std_devs(NI_B),
+            y_fit=K_nom * r_vals,
+            sy_fit=K_nom * sr,
             x=x, sx=sx,
             B_mean=np.mean(unp.nominal_values(B_u)),
             H_max=H_per_Vx.nominal_value * Vx.max(),
@@ -484,16 +506,23 @@ def _(
     }
     fits = {sheet: fit_gap(sheet) for sheet in RUNS}
 
+    def _rel_pct(x):
+        return rf'${100 * abs(x.uncertainty / x.value):.2g}\%$'
+
     _rows = [
         (r'$\langle B\rangle$',                  lambda f: rf'${f["B_mean"]:.2f}\,\mathrm{{T}}$'),
         (r'$H_{\mathrm{max}}$',                  lambda f: rf'${f["H_max"]:.0f}\,\mathrm{{A\,m^{{-1}}}}$'),
         (r'slope $= 1/\mu_0$',                   lambda f: fmt(f['slope'],     r'A\,T^{-1}\,m^{-1}')),
+        (r'slope relative error',                lambda f: _rel_pct(f['slope'])),
         (r'intercept $= L/\mu_{\mathrm{iron}}$', lambda f: fmt(f['intercept'], r'A\,T^{-1}')),
+        (r'intercept relative error',            lambda f: _rel_pct(f['intercept'])),
         (r'$\mu_0^{\mathrm{exp}}$',              lambda f: fmt(f['mu0_exp'],   r'T\,m\,A^{-1}')),
+        (r'$\mu_0$ relative error',              lambda f: _rel_pct(f['mu0_exp'])),
         (r'$n_\sigma$ vs CODATA',                lambda f: rf'${nsigma(f["mu0_exp"], MU0_THEO_U):.1f}$'),
         (r'$\mu_{\mathrm{iron}}/\mu_0$',         lambda f: fmt(f['mu_iron'] / MU0_THEO)),
         (r'$\chi^2/\nu$',                        lambda f: rf'${f["result"].redchi:.2f}\;({f["result"].chi2:.2f}/{f["result"].dof})$'),
-        (r'$p$-value',                           lambda f: rf'${f["result"].p_value:.3f}$'),
+        (r'p-probability',                       lambda f: rf'${f["result"].p_value:.3f}$'),
+        (r'DOF',                                 lambda f: rf'${f["result"].dof}$'),
     ]
     _run_cols = ' | '.join(RUNS[s]['label'] for s in fits)
     _header = f'| Quantity | {_run_cols} |'
@@ -520,18 +549,18 @@ def _(FIG_DIR, RUNS, fits, np, plt):
         yhat_NIB      = slope_NIB * f['x'] + intercept_NIB
 
         ax_fit.errorbar(
-            Lp_mm, f['y_full'], xerr=sx_mm, yerr=f['sy_full'],
+            Lp_mm, f['y_fit'], xerr=sx_mm, yerr=f['sy_fit'],
             fmt=style['marker'], color=style['color'], mfc='white', markersize=5,
             ecolor=style['color'], elinewidth=0.9, capsize=2.5,
             label=rf"{style['label']}  ($\langle B\rangle\approx{f['B_mean']:.2f}$ T,"
-                  rf"  $\chi^2/\nu={r.redchi:.2f}$,  $p={r.p_value:.2f}$)",
+                  rf"  $\chi^2/\nu={r.redchi:.2f}$,  p-prob. ${r.p_value:.2f}$)",
         )
         xs_m = np.linspace(0, f['x'].max() * 1.05, 60)
         ax_fit.plot(xs_m * 1e3, slope_NIB * xs_m + intercept_NIB,
                     '-', color=style['color'], alpha=0.85)
 
         ax_res.errorbar(
-            Lp_mm, f['y_full'] - yhat_NIB, yerr=f['sy_full'],
+            Lp_mm, f['y_fit'] - yhat_NIB, xerr=sx_mm, yerr=f['sy_fit'],
             fmt=style['marker'], color=style['color'], mfc='white', markersize=5,
             ecolor=style['color'], elinewidth=0.9, capsize=2.5,
         )
@@ -559,7 +588,7 @@ def _(FIG_DIR, RUNS, fits, np, plt):
 
 @app.cell(hide_code=True)
 def _(MU0_THEO, RUNS, fits, mo, np):
-    # μ_0 sensitivity sweep. The experimental result μ_0^exp = 1/(K·slope),
+    # μ_0 scale check. The experimental result μ_0^exp = 1/(K·slope),
     # with K = N²A/(R_x R_y C). The log-derivatives are exact:
     #
     #   d ln μ_0 / d ln N   = -2     d ln μ_0 / d ln R_x = +1
@@ -599,9 +628,9 @@ def _(MU0_THEO, RUNS, fits, mo, np):
 
     table_md = "\n".join(rows)
     mo.md(rf"""
-    ### $\mu_0$ sensitivity sweep — which apparatus constant could explain the bias?
+    ### $\mu_0$ scale check — which apparatus quantity could explain the bias?
 
-    Each row shows the fractional change in one apparatus constant that
+    Each row shows the fractional change in one apparatus quantity that
     would, *acting alone*, restore $\mu_0^\mathrm{{exp}}$ to its CODATA
     value. Quantities listed with the smallest required shift are the
     most likely systematic culprits given the calibration uncertainty
@@ -622,7 +651,7 @@ def _(MU0_THEO, RUNS, fits, mo, np):
       than the bias requires.)
     - $L'$: budgeted at $\sim$15 µm absolute, which is 3–14 % relative
       depending on the plate count. Two effects compound: (i) the
-      caliper LSD itself is appreciable on a 0.10 mm plate, and (ii)
+      caliper resolution itself is appreciable on a 0.10 mm plate, and (ii)
       copper plates may stick or include burrs that bias the *effective*
       gap larger than nominal. **A coherent +30 % bias on $L'$ would
       explain the entire $\mu_0$ shortfall** — and is the only entry
@@ -671,7 +700,7 @@ def _(FIG_DIR, MU0_THEO, RUNS, fits, np, plt):
     _ax_mu0.set_yticks(_y, _quantities)
     _ax_mu0.invert_yaxis()
     _ax_mu0.set_xlabel(r"required coherent shift in apparatus constant (\%)")
-    _ax_mu0.set_title(r"Systematic sensitivity of the copper-gap $\mu_0$ result")
+    _ax_mu0.set_title(r"Scale shifts that would move the copper-gap $\mu_0$ result")
     _ax_mu0.grid(True, axis="x", which="major", alpha=0.25)
     _ax_mu0.minorticks_on()
     _ax_mu0.grid(True, axis="x", which="minor", alpha=0.10)
