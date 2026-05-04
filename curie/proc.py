@@ -609,8 +609,8 @@ def _(
         # in the saturation regime and extrapolate to H=0".
         # Algebra (guide page 2):
         #   in saturation,   M = M_0 + alpha * H
-        #   so               B = M_0 + (alpha + 1) * H,
-        #   i.e.             B - (alpha + 1) * H = M_0.
+        #   so               B/mu_0 = M_0 + (alpha + 1) * H,
+        #   i.e.             B/mu_0 - (alpha + 1) * H = M_0.
         # In SI we already pre-compute M = B/mu_0 - H in branches_for_row,
         # so a linear fit M(H) = M_0 + alpha * H on the saturation tail
         # gives M_0 *as the y-intercept* — exactly the "extrapolate the
@@ -636,14 +636,18 @@ def _(
         # M_0 itself is invariant under this choice (a_bg, b_bg cancel
         # in the half-difference), so this is a notational fix; it
         # matches the cross-run cell.
-        _b_pos, _s_pos, _n_pos = sat_intercept(_H_pos, _M_pos_corr, tail="pos")
-        _b_neg, _s_neg, _n_neg = sat_intercept(_H_neg, _M_neg_corr, tail="neg")
-        _bf_pos, _ = sat_intercept_fixed(_H_pos, _M_pos_corr, tail="pos")
-        _bf_neg, _ = sat_intercept_fixed(_H_neg, _M_neg_corr, tail="neg")
+        _b_adapt_pos, _s_adapt_pos, _n_pos = sat_intercept(_H_pos, _M_pos_corr, tail="pos")
+        _b_adapt_neg, _s_adapt_neg, _n_neg = sat_intercept(_H_neg, _M_neg_corr, tail="neg")
+        _b_5pt_pos, _s_5pt_pos = sat_intercept_fixed(_H_pos, _M_pos_corr, tail="pos")
+        _b_5pt_neg, _s_5pt_neg = sat_intercept_fixed(_H_neg, _M_neg_corr, tail="neg")
 
-        _M_0 = 0.5 * (_b_pos - _b_neg)
-        _sigma_M_0 = 0.5 * float(np.hypot(_s_pos, _s_neg))
-        _M_0_5pt = 0.5 * (_bf_pos - _bf_neg)
+        # Primary Method III follows the guide's strict 5-point saturated-tail
+        # prescription. The adaptive estimator is retained as a sensitivity
+        # diagnostic because it can expand into the non-linear shoulder.
+        _M_0 = 0.5 * (_b_5pt_pos - _b_5pt_neg)
+        _sigma_M_0 = 0.5 * float(np.hypot(_s_5pt_pos, _s_5pt_neg))
+        _M_0_adaptive = 0.5 * (_b_adapt_pos - _b_adapt_neg)
+        _sigma_M_0_adaptive = 0.5 * float(np.hypot(_s_adapt_pos, _s_adapt_neg))
         _ns = (_n_pos, _n_neg)
 
         records.append({
@@ -658,7 +662,9 @@ def _(
             "sigma_M_sat_A_per_m": _sigma_M_sat,
             "M_0_A_per_m": _M_0,
             "sigma_M_0_A_per_m": _sigma_M_0,
-            "M_0_5pt_A_per_m": _M_0_5pt,
+            "M_0_5pt_A_per_m": _M_0,
+            "M_0_adaptive_A_per_m": _M_0_adaptive,
+            "sigma_M_0_adaptive_A_per_m": _sigma_M_0_adaptive,
             "M_0_n_used_avg": float(np.mean(_ns)),
         })
 
@@ -824,8 +830,8 @@ def _(
 
     $$
     M(H)=M_0+\alpha H \;\;\Longleftrightarrow\;\;
-    B(H)=M_0+(\alpha+1)H \;\;\Longleftrightarrow\;\;
-    B-(\alpha+1)H=M_0,
+    \frac{{B(H)}}{{\mu_0}}=M_0+(\alpha+1)H \;\;\Longleftrightarrow\;\;
+    \frac{{B}}{{\mu_0}}-(\alpha+1)H=M_0,
     $$
 
     so $M_0(T)$ is recovered *as the intersection of the
@@ -858,17 +864,17 @@ def _(
     extrapolation* (Method III). The fitted slope $\alpha=\chi_\mathrm{{HF}}$
     is the high-field susceptibility (the guide's $\alpha$).
 
-    The fit window is grown adaptively from $n_\mathrm{{min}}=5$ points
-    (the lab guide's prescription) outward, ranked by tail-side $|H|$;
-    expansion is frozen when **either** the intercept **or** the slope
-    drifts by more than $2\sigma$ relative to the previous fit, since
-    both signal the end of the linear/saturated regime. The LabVIEW
-    export stores the $H\ge0$ half of the upper branch and the $H\le0$
-    half of the lower branch, so each loop contributes two saturated
-    tips. Statistical uncertainty on $M_0$ is propagated in quadrature
-    from the two per-fit intercept sigmas. The instructor's strict
-    5-point fit is retained alongside as `M_0_5pt_A_per_m` for
-    cross-checking.
+    The primary Method-III value uses the instructor's strict 5-point
+    saturated-tail fit, ranked by tail-side $|H|$. This avoids allowing
+    an adaptive window to grow into the non-linear remanence shoulder.
+    The earlier adaptive estimator is retained as
+    `M_0_adaptive_A_per_m` for sensitivity checks; it grows outward from
+    $n_\mathrm{{min}}=5$ and freezes when either the intercept or slope
+    drifts by more than $2\sigma$ relative to the previous fit. The
+    LabVIEW export stores the $H\ge0$ half of the upper branch and the
+    $H\le0$ half of the lower branch, so each loop contributes two
+    saturated tips. Statistical uncertainty on $M_0$ is propagated in
+    quadrature from the two per-fit intercept sigmas.
 
     The branches are pre-corrected for the global paramagnetic
     background (fitted in the high-T cell above) before the saturation
@@ -923,22 +929,20 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, pd, summary):
     # far below Tc, M0 saturates (M0 -> Msat) and M0^2 flattens, which
     # breaks the linear form. A wide-window fit pulls Tc upward.
     #
-    # Algorithm: K-scan with p-value selection.
+    # Algorithm: anchored K-scan with physical gates.
     #   1. Seed Tc from the half-height bootstrap on the normalized M_0
     #      curve (the same model-free anchor used elsewhere).
-    #   2. Filter to the candidate pool: M0 > 0, SNR > 3, and
-    #      T <= Tc_seed + FIT_UPPER_MARGIN_K (mean-field has M^2 = 0
-    #      above Tc, so any data further above is noise).
+    #   2. Filter to the candidate pool: M0 > 0, SNR > 3, and a fixed
+    #      band around the seed. The seed is not iterated, because letting
+    #      the fitted zero-crossing redefine the high-T pool can make the
+    #      fit chase noisy above-transition points upward.
     #   3. Sort the pool by T descending so the points closest to Tc
     #      (where mean-field is asymptotically valid) come first.
     #   4. Sweep K = K_MIN .. K_MAX and run ODR linear fit on the top-K
     #      points; record (K, Tc_K, chi^2/nu, p-value).
-    #   5. Pick K* = argmax_K p_value(K) -- the largest window for which
-    #      the data are still statistically consistent with a single
-    #      straight line. This naturally rejects the curving low-T tail
-    #      because including it tanks p_value via chi^2 inflation.
-    #   6. Iterate the outer Tc to convergence (the upper-margin filter
-    #      depends on Tc, so two passes are enough in practice).
+    #   5. Keep only physical fits: negative slope and a zero crossing
+    #      close to the seed. Among statistically acceptable fits, pick
+    #      the largest K; otherwise pick the best p-value physical fit.
     #
     # K_MIN = 5 is the lab guide's prescription. K_MAX is bounded by
     # the candidate-pool size; this is large enough that the optimum
@@ -957,6 +961,9 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, pd, summary):
     # right at the transition stay in (giving the fit some leverage on
     # the intercept) but no further.
     FIT_UPPER_MARGIN_K = 2.0
+    FIT_LOWER_MARGIN_K = 35.0
+    FIT_TC_TOLERANCE_K = 25.0
+    FIT_MIN_P_VALUE = 0.05
 
     _seed_row = diagnostics_with_sigma.iloc[2]
     _Tc_seed = float(_seed_row["Tc_K"])
@@ -978,84 +985,76 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, pd, summary):
         except Exception:
             return None
         b, m = float(res.params[0]), float(res.params[1])
-        if m == 0.0 or not np.isfinite(m):
+        if m >= 0.0 or not np.isfinite(m):
             return None
-        return res, sel, -b / m
+        Tc_fit = -b / m
+        if not np.isfinite(Tc_fit):
+            return None
+        if abs(Tc_fit - _Tc_seed) > FIT_TC_TOLERANCE_K:
+            return None
+        return res, sel, Tc_fit
 
-    Tc_iter = _Tc_seed
     odr_result = None
     fit_mask = np.zeros_like(T_all, dtype=bool)
     K_best = K_MIN
     K_scan_records = []
-    for _outer in range(5):
-        # Candidate pool: physical filters only; window selection is
-        # delegated to the K-scan below.
-        pool = (M0_all > 0) & (snr > 3.0) & (T_all <= Tc_iter + FIT_UPPER_MARGIN_K)
-        idx_pool = np.flatnonzero(pool)
-        if idx_pool.size < K_MIN:
-            # Fallback: if the physical filters reject too much, pick
-            # the K_MIN points whose T is closest to the seed.
-            idx_pool = np.argsort(np.abs(T_all - Tc_iter))[: max(K_MIN, 8)]
-        # Top-K closest to Tc from below: sort by T descending so the
-        # K=K_MIN window is anchored at the high-T (asymptotic) end and
-        # grows downward into the increasingly nonlinear region.
-        idx_sorted = idx_pool[np.argsort(-T_all[idx_pool])]
+    pool = (
+        (M0_all > 0)
+        & (snr > 3.0)
+        & (T_all >= _Tc_seed - FIT_LOWER_MARGIN_K)
+        & (T_all <= _Tc_seed + FIT_UPPER_MARGIN_K)
+    )
+    idx_pool = np.flatnonzero(pool)
+    if idx_pool.size < K_MIN:
+        # Fallback: if the physical filters reject too much, stay local
+        # to the half-height seed rather than following a model intercept.
+        idx_pool = np.argsort(np.abs(T_all - _Tc_seed))[: max(K_MIN, 8)]
+    idx_sorted = idx_pool[np.argsort(-T_all[idx_pool])]
 
-        K_max_eff = len(idx_sorted)
-        scan_local = []
-        for K in range(K_MIN, K_max_eff + 1):
-            out = _fit_top_K(idx_sorted, K)
-            if out is None:
-                continue
-            res_K, sel_K, Tc_K_val = out
-            scan_local.append({
-                "K": K,
-                "Tc_K": Tc_K_val,
-                "redchi": float(res_K.redchi),
-                "p_value": float(res_K.p_value),
-                "_res": res_K,
-                "_sel": sel_K,
-            })
-        if not scan_local:
-            break
+    for K in range(K_MIN, len(idx_sorted) + 1):
+        out = _fit_top_K(idx_sorted, K)
+        if out is None:
+            continue
+        res_K, sel_K, Tc_K_val = out
+        K_scan_records.append({
+            "K": K,
+            "Tc_K": Tc_K_val,
+            "redchi": float(res_K.redchi),
+            "p_value": float(res_K.p_value),
+            "_res": res_K,
+            "_sel": sel_K,
+        })
 
-        # Pick K* = argmax p_value. Ties (rare) resolve to the larger K
-        # for statistical power.
-        best = max(scan_local, key=lambda r: (r["p_value"], r["K"]))
+    if K_scan_records:
+        acceptable = [r for r in K_scan_records if r["p_value"] >= FIT_MIN_P_VALUE]
+        if acceptable:
+            best = max(acceptable, key=lambda r: (r["K"], r["p_value"]))
+        else:
+            best = max(K_scan_records, key=lambda r: (r["p_value"], r["K"]))
         odr_result = best["_res"]
-        fit_mask = np.zeros_like(T_all, dtype=bool)
         fit_mask[best["_sel"]] = True
         K_best = int(best["K"])
-        Tc_new = float(best["Tc_K"])
-        K_scan_records = scan_local
-
-        if abs(Tc_new - Tc_iter) < 0.05:
-            Tc_iter = Tc_new
-            break
-        Tc_iter = Tc_new
 
     K_scan_table = pd.DataFrame([
         {"K": r["K"], "Tc_K": r["Tc_K"], "redchi": r["redchi"], "p_value": r["p_value"]}
         for r in K_scan_records
     ])
 
+    if odr_result is None:
+        raise RuntimeError("No physically acceptable M0^2 mean-field fit window found.")
+
     msq_intercept = float(odr_result.params[0])
     msq_slope = float(odr_result.params[1])
     msq_sigma_intercept = float(odr_result.errors[0])
     msq_sigma_slope = float(odr_result.errors[1])
-    msq_cov_si = float(odr_result.cov[0, 1]) if odr_result.cov is not None else 0.0
-
-    # When the fit's redchi > 1 the model is not perfectly capturing the
-    # data (mean-field is approximate); rescale the ODR covariance by
-    # sqrt(redchi) so the quoted 1-sigma reflects the actual scatter
-    # around the best-fit line. This is the standard "Birge-style"
-    # rescaling used elsewhere when reduced chi-square indicates the
-    # residual model error is non-negligible.
     redchi = float(odr_result.redchi)
-    rescale = float(np.sqrt(max(redchi, 1.0)))
-    msq_sigma_intercept *= rescale
-    msq_sigma_slope *= rescale
-    msq_cov_si *= rescale**2
+    # scipy.odr reports sd_beta already scaled by out.res_var. taulab exposes
+    # unscaled cov_beta as .cov, so multiply by the same residual variance
+    # before propagating an intercept-derived Tc. Do not multiply errors by
+    # sqrt(redchi) again.
+    odr_cov_scale = float(getattr(odr_result.raw_output, "res_var", redchi))
+    msq_cov_si = float(odr_result.cov[0, 1] * odr_cov_scale) if odr_result.cov is not None else 0.0
+    rescale = float(np.sqrt(odr_cov_scale))
 
     Tc_K = -msq_intercept / msq_slope
     var_Tc = (
@@ -1098,7 +1097,7 @@ def _(FIT_UPPER_MARGIN_K, K_MIN, K_best, K_scan_table, Tc_C, Tc_K, fit_mask, mo,
         _sep = "|---|---|---|---|"
         _rows = []
         for _, _r in _disp.iterrows():
-            _marker = " ⬅ chosen" if int(_r["K"]) == K_best else ""
+            _marker = " (chosen)" if int(_r["K"]) == K_best else ""
             _rows.append(f"| {int(_r['K'])} | {_r['Tc_K']:.2f} | {_r['redchi']:.2f} | {_r['p_value']:.3g}{_marker} |")
         _truncated_note = f"\n\n_({len(K_scan_table) - len(_disp)} larger-K rows omitted; their $p$-values are at or below noise.)_" if len(_disp) < len(K_scan_table) else ""
         _scan_md = "\n".join([_hdr, _sep, *_rows]) + _truncated_note
@@ -1111,48 +1110,51 @@ def _(FIT_UPPER_MARGIN_K, K_MIN, K_best, K_scan_table, Tc_C, Tc_K, fit_mask, mo,
     > **This block is a methodological cross-check, not a $T_c$ measurement.**
     > The mean-field form $M_0^2(T)\propto T_c-T$ is only a near-$T_c$
     > approximation, and even on the optimally chosen window
-    > (described below) its Birge-rescaled error bar is too wide to be
-    > informative as an independent estimator. The headline $T_c$ is
-    > the model-free half-height crossing reported in the bottom-line
-    > callout.
+    > (described below) it remains model-dependent and sensitive to the
+    > tail extraction. The headline value is therefore the model-free
+    > half-height apparent transition reported in the bottom-line callout.
 
-    **Window selection by $p$-value scan.** $M_0^2$ flattens far below
+    **Window selection by anchored $K$-scan.** $M_0^2$ flattens far below
     $T_c$ as $M_0\to M_\mathrm{{sat}}$, so a wide window pulls the fit
     steep and biases $T_c$ upward. We avoid hand-tuning a halfwidth by
-    scanning the number of points $K$ used: candidate points are those
-    with $M_0>0$, $M_0/\sigma_{{M_0}}>3$, and $T\le T_c+{FIT_UPPER_MARGIN_K:.0f}\,\mathrm{{K}}$;
+    scanning the number of points $K$ used in a fixed band around the
+    Method-III half-height seed: candidate points are those with
+    $M_0>0$, $M_0/\sigma_{{M_0}}>3$, and
+    $T\le T_\mathrm{{seed}}+{FIT_UPPER_MARGIN_K:.0f}\,\mathrm{{K}}$;
     they are sorted by $T$ descending so the top-$K$ window is anchored
     at the high-$T$ end (where mean-field is asymptotically valid) and
     grows downward into the increasingly nonlinear region. For each
     $K\in[{K_MIN:d},K_\mathrm{{max}}]$ we run the ODR linear fit and
-    record $(T_c,\chi^2/\nu,p)$. The selected window is the one
-    maximizing $p$ — i.e. the largest $K$ for which the data are still
-    statistically consistent with a single straight line. The outer
-    $T_c$ is iterated to convergence since the upper-margin filter
-    depends on $T_c$.
+    record $(T_c,\chi^2/\nu,p)$. Fits with non-negative slope or a
+    zero-crossing far from the seed are rejected. Among statistically
+    acceptable fits ($p\ge0.05$), the selected window is the largest
+    $K$; otherwise it is the highest-$p$ physical fit. The candidate
+    pool is not redefined by the fitted intercept, avoiding the upward
+    drift that occurs when a noisy model cross-check is allowed to chase
+    its own $T_c$.
 
-    The best window uses **$K^* = {K_best}$** points and converges to
+    The best window uses **$K^* = {K_best}$** points and gives
 
     $$
     T_c^\mathrm{{MF}} \;=\; {Tc_K:.1f}\;\mathrm{{K}}\;=\;{Tc_C:.1f}\,^\circ\mathrm{{C}}
-    \quad(\chi^2/\nu={odr_result.redchi:.2f},\;p={odr_result.p_value:.3f},\;\text{{Birge-rescaled }}\sigma_{{T_c}}=\pm{sigma_Tc_K:.1f}\,\mathrm{{K}}).
+    \quad(\chi^2/\nu={odr_result.redchi:.2f},\;p={odr_result.p_value:.3f},\;\sigma_{{T_c}}=\pm{sigma_Tc_K:.1f}\,\mathrm{{K}}).
     $$
 
-    Birge-rescaling: when $\chi^2/\nu>1$ we multiply the covariance by
-    $\chi^2/\nu$ (i.e. errors by $\sqrt{{\chi^2/\nu}}={rescale:.2f}$)
-    so the quoted $\sigma_{{T_c}}$ reflects the actual scatter around
-    the fit rather than the underestimated per-loop $\sigma_{{M_0}}$.
+    ODR covariance note: SciPy's `sd_beta` already includes the residual
+    variance scale (factor `{rescale:.2f}` on parameter errors here), so
+    the propagation uses that covariance directly and does not apply a
+    second Birge multiplication.
 
     **K-scan trajectory.** Each row is one ODR fit on the top-$K$
-    points (closest to $T_c$ from below). The chosen row maximizes
-    $p$-value; reading down the table you can see how $\chi^2/\nu$
-    and $T_c$ evolve as more low-$T$ data is forced in.
+    points (closest to the half-height seed from below). Reading down the
+    table shows how $\chi^2/\nu$ and $T_c$ evolve as more low-$T$ data is
+    forced in.
 
     {_scan_md}
 
-    Adaptive vs 5-point baseline (mean over retained loops):
-    $\langle M_0^\text{{adapt}}\rangle = {summary['M_0_A_per_m'].mean():.3g}$,
-    $\langle M_0^\text{{5pt}}\rangle = {summary['M_0_5pt_A_per_m'].mean():.3g}\;\mathrm{{A\,m^{{-1}}}}$.
+    5-point baseline vs adaptive sensitivity (mean over retained loops):
+    $\langle M_0^\text{{5pt}}\rangle = {summary['M_0_A_per_m'].mean():.3g}$,
+    $\langle M_0^\text{{adapt}}\rangle = {summary['M_0_adaptive_A_per_m'].mean():.3g}\;\mathrm{{A\,m^{{-1}}}}$.
     """)
     return
 
@@ -1231,7 +1233,7 @@ def _(
     if np.isfinite(Tc_headline):
         ax_msq.axvline(
             Tc_headline, color="C2", linewidth=1.4, linestyle="-",
-            label=rf"half-height headline $T_c={Tc_headline:.1f}\pm{sigma_Tc_headline_stat:.2f}\,\mathrm{{K}}$",
+            label=rf"half-height headline $T_c^{{\mathrm{{app}}}}={Tc_headline:.1f}\pm{sigma_Tc_headline_stat:.2f}\,\mathrm{{K}}$",
         )
 
     ax_msq.set_xlim(_x_lo, _x_hi)
@@ -1337,8 +1339,8 @@ def _(least_squares, np, pd, summary):
     _specs = [
         (r"I: $M_r$", "M_r_A_per_m", "sigma_M_r_A_per_m"),
         (r"II: $M_\mathrm{sat}$", "M_sat_A_per_m", "sigma_M_sat_A_per_m"),
-        (r"III: $M_0$ adaptive", "M_0_A_per_m", "sigma_M_0_A_per_m"),
-        (r"IIIb: $M_0$ 5-point", "M_0_5pt_A_per_m", "sigma_M_0_A_per_m"),
+        (r"III: $M_0$ 5-point", "M_0_A_per_m", "sigma_M_0_A_per_m"),
+        (r"IIIb: $M_0$ adaptive", "M_0_adaptive_A_per_m", "sigma_M_0_adaptive_A_per_m"),
     ]
     _records, _points_frames, _curve_frames = [], [], []
     for _spec in _specs:
@@ -1393,8 +1395,8 @@ def _(meanfield_full_curves, meanfield_full_fits, meanfield_full_points, np, plt
     _styles = {
         r"I: $M_r$": ("C0", "o"),
         r"II: $M_\mathrm{sat}$": ("C3", "s"),
-        r"III: $M_0$ adaptive": ("C2", "^"),
-        r"IIIb: $M_0$ 5-point": ("C4", "D"),
+        r"III: $M_0$ 5-point": ("C2", "^"),
+        r"IIIb: $M_0$ adaptive": ("C4", "D"),
     }
     for _method, _group in meanfield_full_points.groupby("method", sort=False):
         _color, _marker = _styles[_method]
@@ -1640,7 +1642,7 @@ def _(
     read_table,
 ):
     # Cross-run check: re-run the Method-3 chain (background subtraction,
-    # adaptive saturation-tail intercepts, M_0^2(T) ODR fit) on all three
+    # strict 5-point saturation-tail intercepts, M_0^2(T) ODR fit) on all three
     # data files. The spread of T_c across runs is a practical empirical
     # systematic that absorbs whatever the thermometer absolute accuracy,
     # the warming-vs-cooling thermal lag sign, and the sample-mounting
@@ -1667,28 +1669,13 @@ def _(
         B_n = _B_per_Y * row[yn].to_numpy(float)
         return H_p, B_p / MU0 - H_p, H_n, B_n / MU0 - H_n
 
-    def _tail_intercept(H, M, tail, n_min=5, frac=0.5, tol_b=2.0, tol_a=2.0):
-        # Mirrors sat_intercept() in the main pipeline: gate window
-        # expansion on BOTH intercept and slope stability so the fit
-        # can't silently drift into the remanence shoulder.
+    def _tail_intercept(H, M, tail, n=5):
+        # Mirrors the main pipeline's primary Method III: the guide's strict
+        # five tail-side points, avoiding adaptive growth into the shoulder.
         order = np.argsort(-H) if tail == "pos" else np.argsort(H)
         h, m = H[order], M[order]
-        n_max = min(len(h), max(n_min + 1, int(frac * len(h))))
-        co, cov = np.polyfit(h[:n_min], m[:n_min], 1, cov=True)
+        co, cov = np.polyfit(h[:n], m[:n], 1, cov=True)
         b, sb = float(co[1]), float(np.sqrt(cov[1, 1]))
-        a, sa = float(co[0]), float(np.sqrt(cov[0, 0]))
-        for n in range(n_min + 1, n_max + 1):
-            try:
-                co2, cov2 = np.polyfit(h[:n], m[:n], 1, cov=True)
-            except (np.linalg.LinAlgError, ValueError):
-                break
-            b2, sb2 = float(co2[1]), float(np.sqrt(cov2[1, 1]))
-            a2, sa2 = float(co2[0]), float(np.sqrt(cov2[0, 0]))
-            if abs(b2 - b) > tol_b * max(sb, 1e-30):
-                break
-            if abs(a2 - a) > tol_a * max(sa, 1e-30):
-                break
-            b, sb, a, sa = b2, sb2, a2, sa2
         return b, sb
 
     def _run_method3(path):
@@ -1837,12 +1824,8 @@ def _(
 
         b0, m0 = float(res.params[0]), float(res.params[1])
         sb0, sm0 = float(res.errors[0]), float(res.errors[1])
-        cov_si = float(res.cov[0, 1]) if res.cov is not None else 0.0
-        # Birge rescale to absorb mean-field model mismatch.
-        rescale_run = float(np.sqrt(max(res.redchi, 1.0)))
-        sb0 *= rescale_run
-        sm0 *= rescale_run
-        cov_si *= rescale_run**2
+        cov_scale = float(getattr(res.raw_output, "res_var", res.redchi))
+        cov_si = float(res.cov[0, 1] * cov_scale) if res.cov is not None else 0.0
 
         Tc = -b0 / m0
         var_Tc = (
@@ -1877,11 +1860,11 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Method IV cross-check: Curie–Weiss above $T_c$
+    ## Method IV qualitative cross-check: Curie–Weiss above $T_c$
 
     The half-height (Methods I–III) and mean-field (Method III $M_0^2$)
-    estimators all use the *below-$T_c$* side of the transition. As an
-    independent cross-check, we also fit the *above-$T_c$* side via the
+    estimators all use the *below-$T_c$* side of the transition. As a
+    qualitative cross-check, we also fit the *above-$T_c$* side via the
     Curie–Weiss law
 
     $$
@@ -1891,17 +1874,18 @@ def _(mo):
     $$
 
     so $1/\chi$ is linear in $T$ with the $T$-axis intercept equal to
-    $T_c$. Per loop we fit $\chi(T)$ as the slope of the loop's full
+    $T_c$. Per loop we fit an apparent $\chi(T)$ as the slope of the loop's full
     $M(H)$ data: above $T_c$ the loop collapses to a single line through
     the origin (no hysteresis), so a single linear regression returns
-    a well-defined $\chi$. Restricting the $1/\chi$ vs $T$ ODR fit to
+    a well-defined response slope. Restricting the $1/\chi$ vs $T$ ODR fit to
     $T > T_c^\mathrm{seed} + 5\,\mathrm{K}$ keeps us in the asymptotic
     paramagnetic regime where Curie–Weiss is valid.
 
-    Because this estimator uses only the high-$T$ data, it does not
-    share inputs with the half-height crossings on the low-$T$ side —
-    agreement between the two corroborates the headline; disagreement
-    would flag a finite-$H$ smearing systematic on the half-height.
+    The intercept is insensitive to a common multiplicative rescaling of
+    $M/H$, but the Curie rod geometry and demagnetizing correction were
+    not independently calibrated here. This therefore checks whether the
+    high-$T$ response extrapolates to the same temperature scale; it is
+    not a standalone calibrated susceptibility measurement.
     """)
     return
 
@@ -1917,22 +1901,24 @@ def _(
     odr_fit,
     sigma_T_K,
 ):
-    # Method IV (cross-check): Curie-Weiss above T_c.
+    # Method IV (qualitative cross-check): Curie-Weiss above T_c.
     # In the paramagnetic regime, chi(T) = M/H = C / (T - T_c), so
     # 1/chi = (T - T_c)/C is linear in T with T-axis intercept T_c.
-    # Per loop we fit chi from the full loop's M(H) data:
+    # Per loop we fit an apparent chi from the full loop's M(H) data:
     #   - above T_c the loop has no hysteresis, so all four branches
     #     collapse to a single line through the origin and a single
     #     polyfit slope is well-defined;
     #   - below T_c the slope is contaminated by hysteresis, so we
     #     restrict the 1/chi vs T fit to T > Tc_seed + buffer.
     # The headline T_c family uses the half-height crossings (below-T_c
-    # side); this cell adds an independent paramagnetic-side estimate
-    # using only the high-T data, which gives an honest cross-check
-    # because the half-height and Curie-Weiss methods do not share the
-    # same inputs. chi here is computed from the *uncorrected* M, since
-    # the global background we subtract elsewhere is itself an average
-    # chi over the high-T quartile and would be circular here.
+    # side); this cell adds a paramagnetic-side qualitative check using
+    # only the high-T data. The common M/H calibration scale does not
+    # move the intercept, but the Curie rod geometry and demagnetizing
+    # factor are not calibrated well enough to call this a standalone
+    # susceptibility measurement. chi here is computed from the
+    # *uncorrected* M, since the global background we subtract elsewhere
+    # is itself an average chi over the high-T quartile and would be
+    # circular here.
     chi_vals = np.full(len(data), np.nan, dtype=float)
     sigma_chi_vals = np.full(len(data), np.nan, dtype=float)
     for _i in range(len(data)):
@@ -1985,14 +1971,10 @@ def _(
             m_CW = float(cw_result.params[1])
             sb_CW = float(cw_result.errors[0])
             sm_CW = float(cw_result.errors[1])
-            cov_CW = float(cw_result.cov[0, 1]) if cw_result.cov is not None else 0.0
             redchi_CW = float(cw_result.redchi)
-            # Birge rescale to absorb model mismatch (Curie-Weiss is also
-            # an approximation; mean-field corrections inflate chi^2/nu).
-            rescale_CW = float(np.sqrt(max(redchi_CW, 1.0)))
-            sb_CW *= rescale_CW
-            sm_CW *= rescale_CW
-            cov_CW *= rescale_CW ** 2
+            cov_scale_CW = float(getattr(cw_result.raw_output, "res_var", redchi_CW))
+            rescale_CW = float(np.sqrt(cov_scale_CW))
+            cov_CW = float(cw_result.cov[0, 1] * cov_scale_CW) if cw_result.cov is not None else 0.0
             if m_CW != 0.0 and np.isfinite(m_CW):
                 Tc_CW = -b_CW / m_CW
                 _var = (
@@ -2091,7 +2073,7 @@ def _(
         _T_line = np.linspace(max(Tc_CW, _x_lo), _x_hi, 200)
         ax_cw.plot(
             _T_line, m_CW * _T_line + b_CW, "-", color="C3", linewidth=2.0,
-            label=rf"Curie–Weiss $T_c={Tc_CW:.1f}\pm{sigma_Tc_CW:.1f}\,\mathrm{{K}}$",
+            label=rf"apparent Curie–Weiss $T_c={Tc_CW:.1f}\pm{sigma_Tc_CW:.1f}\,\mathrm{{K}}$",
         )
         if _x_lo <= Tc_CW <= _x_hi:
             ax_cw.axvline(Tc_CW, color="C3", linewidth=0.8, linestyle=":")
@@ -2101,7 +2083,7 @@ def _(
     ax_cw.set_ylim(_y_lo, _y_hi)
     ax_cw.set_xlabel(r"$T$ (K)")
     ax_cw.set_ylabel(r"$1/\chi$ (arb. units)")
-    ax_cw.set_title(r"Curie–Weiss $1/\chi(T)$ above $T_c$ (Method IV cross-check)")
+    ax_cw.set_title(r"Apparent Curie–Weiss $1/\chi(T)$ above $T_c$ (Method IV check)")
     ax_cw.minorticks_on()
     ax_cw.grid(True, which="major", alpha=0.25)
     ax_cw.grid(True, which="minor", alpha=0.10)
@@ -2177,7 +2159,7 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, meanfield_f
     # The mean-field-vs-half-height shift is NOT
     # added in quadrature here: the mean-field model is not adopted as
     # the headline estimator (its narrow-window linear approximation
-    # produces a chi^2/nu >> 1 fit and a Birge-rescaled error bar that
+    # produces a chi^2/nu >> 1 fit and a broad error bar that
     # is too wide to be informative), so quoting the gap to it as a
     # systematic on the half-height result would punish the headline
     # for an estimator we have explicitly chosen not to use. Instead,
@@ -2217,7 +2199,7 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, meanfield_f
 
     mo.callout(
         mo.md(rf"""
-    ### Bottom-line $T_c$ for the Curie experiment
+    ### Bottom-line apparent transition temperature for the Curie experiment
 
     **Half-height crossings — three methods on run `first`** (headline family):
 
@@ -2236,22 +2218,25 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, meanfield_f
     runs. Including all three gives a conservative all-drive spread of
     $\sigma_\text{{run,all}}={run_spread_all:.1f}\,\mathrm{{K}}$.
 
-    **Headline value (model-free, half-height across methods 1, 2, 3-normalized, run `first`):**
+    **Headline value (model-free apparent half-height transition across methods 1, 2, 3-normalized, run `first`):**
 
     $$
-    T_c \;=\; {Tc_headline:.1f} \;\pm\; {sigma_Tc_headline_stat:.1f}_\text{{stat}}
+    T_c^\mathrm{{app}} \;=\; {Tc_headline:.1f} \;\pm\; {sigma_Tc_headline_stat:.1f}_\text{{stat}}
        \;\pm\; {syst_total:.1f}_\text{{syst}} \;\mathrm{{K}}
     \;=\; {Tc_headline_C:.1f}^\circ\mathrm{{C}}.
     $$
 
-    The statistical 1-$\sigma$ is the inverse-variance combine of the
-    three half-height bootstrap errors: $\sigma_\text{{stat}}={sigma_Tc_headline_stat:.2f}\,\mathrm{{K}}$.
-    The three estimates differ by much more than these per-method
-    bootstrap errors allow under the assumption that they sample the
-    same quantity ($\chi^2/\nu={redchi_combine:.1f}$; equivalent Birge
-    factor $={birge_combine:.1f}$). That disagreement is therefore
-    assigned to the systematic budget below rather than also inflating
-    the statistical error bar.
+    This is an operational finite-field transition midpoint, not a clean
+    zero-field thermodynamic Curie temperature. The statistical 1-$\sigma$
+    is the inverse-variance combine of the three half-height bootstrap
+    errors, quoted only as the repeatability of this common pipeline:
+    $\sigma_\text{{stat}}={sigma_Tc_headline_stat:.2f}\,\mathrm{{K}}$.
+    The three estimates differ by much more than these per-method bootstrap
+    errors allow under the assumption that they sample the same quantity
+    ($\chi^2/\nu={redchi_combine:.1f}$; equivalent Birge factor
+    $={birge_combine:.1f}$). That correlated method disagreement is therefore
+    assigned to the systematic budget below rather than also inflating the
+    statistical error bar.
 
     The systematic 1-$\sigma$ combines
 
@@ -2283,7 +2268,7 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, meanfield_f
     The $M_0^2(T)\propto T_c-T$ form is a near-$T_c$ approximation.
     With the $p$-value $K$-scan selecting the optimal linear window,
     the ODR fit gives $T_c^\mathrm{{MF}}={Tc_K:.1f}\pm{sigma_Tc_K:.1f}\,\mathrm{{K}}$
-    ($\chi^2/\nu={odr_result.redchi:.2f}$, Birge-rescaled). This sits
+    ($\chi^2/\nu={odr_result.redchi:.2f}$). This sits
     ${mf_shift_display:.0f}\,\mathrm{{K}}$ above the half-height headline
     and the Curie–Weiss paramagnetic-side estimate (both at $\sim$213–217 K).
     Two readings of the disagreement:
@@ -2301,25 +2286,25 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, meanfield_f
     We cannot decide between these from this run alone, so the
     mean-field $T_c$ is kept as a methodological cross-check only and
     is *not* folded into the headline systematic. The headline remains
-    the model-free half-height (corroborated by Curie–Weiss); the gap
+    the model-free apparent half-height transition; the gap
     is reported here verbatim so a reader can apply their own judgement.
 
-    **Cross-check: Curie–Weiss $T_c$ from $1/\chi(T)$ above $T_c$.**
+    **Qualitative cross-check: Curie–Weiss $T_c$ from $1/\chi(T)$ above $T_c$.**
     Independently of the half-height (which uses the below-$T_c$ side)
     and the mean-field fit (also below-$T_c$), the paramagnetic-side
     Curie–Weiss relation $\chi=C/(T-T_c)$ predicts $1/\chi$ linear in
-    $T$ with $T$-axis intercept $T_c$. Per-loop $\chi(T)$ is fit from
+    $T$ with $T$-axis intercept $T_c$. Per-loop apparent $\chi(T)$ is fit from
     the full single-loop $M(H)$ slope (above $T_c$ the four branches
     collapse to one line through the origin, so a single slope is
     well-defined). An ODR fit of $1/\chi$ vs $T$ on the paramagnetic
     window gives
     $T_c^\mathrm{{CW}} = {Tc_CW:.1f}\pm{sigma_Tc_CW:.1f}\,\mathrm{{K}}$
-    ($\chi^2/\nu={redchi_CW:.1f}$, Birge-rescaled). Because this
-    estimator uses *only* the high-$T$ data, it does not share inputs
-    with the half-height crossing on the low-$T$ side; agreement
-    within $\sim$few K corroborates the headline, while a large
-    disagreement would flag a finite-$H$ smearing systematic on the
-    half-height result.
+    ($\chi^2/\nu={redchi_CW:.1f}$). A common multiplicative error in
+    the placeholder $M/H$ calibration would not move the intercept, but
+    the rod geometry and demagnetizing correction are not calibrated
+    well enough for an absolute susceptibility analysis; together with
+    the large $\chi^2/\nu$, this makes the fit qualitative evidence of
+    consistency rather than an independent precision $T_c$.
     """),
         kind="success",
     )
@@ -2365,7 +2350,7 @@ def _(
         )
         _ax_tc.axhline(
             Tc_headline, color="C0", linewidth=1.5,
-            label=rf"headline $T_c={Tc_headline:.1f}$ K",
+            label=rf"headline $T_c^{{\mathrm{{app}}}}={Tc_headline:.1f}$ K",
         )
 
     _x_positions = []
@@ -2443,7 +2428,7 @@ def _(
         )
 
     # Bound y to the region populated by point estimates. Method-IV
-    # CW's ~93 K Birge-rescaled errorbar would otherwise stretch the
+    # CW's broad propagated errorbar would otherwise stretch the
     # axis past the science region; matplotlib will draw it but clip
     # the bar at the axis edge, which is acceptable since the legend
     # quotes the value and the markdown reports the full number.

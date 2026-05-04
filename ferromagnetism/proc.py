@@ -25,7 +25,7 @@ def _(mo):
 
     $$H = \frac{N}{2\,L\,R_x}\,\Delta V_x, \qquad B = \frac{R_y\,C}{2\,N\,A}\,\Delta V_y.$$
 
-    Cubic-spline interpolation gives smooth peak-envelope $B(H)$ and
+    Shape-preserving interpolation gives smooth peak-envelope $B(H)$ and
     $\mu_{\mathrm{r}}(H)=\frac{B}{\mu_0 H}$ curves. The full loop trajectory was not
     exported, so this is an envelope measurement rather than a first-branch
     magnetization curve and cannot give $B_r$, $H_c$, or loop area.
@@ -55,7 +55,7 @@ def _():
     import matplotlib.pyplot as plt
 
     from uncertainties import ufloat, unumpy as unp
-    from scipy.interpolate import CubicSpline
+    from scipy.interpolate import PchipInterpolator
 
     from taulab import (
         PhysicalSize,
@@ -118,12 +118,12 @@ def _():
         return f'${core}{umod}$'
 
     return (
-        CubicSpline,
         DATA_XLSX,
         FIG_DIR,
         MU0_THEO,
         MU0_THEO_U,
         PhysicalSize,
+        PchipInterpolator,
         caliper,
         column_lsd,
         combine,
@@ -309,20 +309,20 @@ def _(
 
 
 @app.cell
-def _(CubicSpline, FIG_DIR, np, plt, pt1):
+def _(FIG_DIR, PchipInterpolator, np, plt, pt1):
     # B(H) anchored at the origin for plotting the peak-envelope curve;
     # μ_r(H) not anchored — μ_r(0) is a finite initial permeability we
     # do not measure directly.
     H_nodes = np.concatenate([[0.0], pt1['H'].to_numpy()])
     B_nodes = np.concatenate([[0.0], pt1['B'].to_numpy()])
     H_sorted, _ui = np.unique(H_nodes, return_index=True)
-    cs_B    = CubicSpline(H_sorted, B_nodes[_ui], bc_type='natural')
+    interp_B = PchipInterpolator(H_sorted, B_nodes[_ui])
     H_grid  = np.linspace(0.0, pt1['H'].max() * 1.01, 500)
 
     H_mu    = pt1['H'].to_numpy()
     mu_vals = pt1['mu_rel'].to_numpy()
     Hmu_sorted, _uj = np.unique(H_mu, return_index=True)
-    cs_mu    = CubicSpline(Hmu_sorted, mu_vals[_uj], bc_type='natural')
+    interp_mu = PchipInterpolator(Hmu_sorted, mu_vals[_uj])
     Hmu_grid = np.linspace(H_mu.min(), H_mu.max(), 500)
     peak_idx = pt1['mu_rel'].idxmax()
 
@@ -331,7 +331,7 @@ def _(CubicSpline, FIG_DIR, np, plt, pt1):
 
     C_B, C_MU = 'C0', 'C3'
 
-    axB.plot(H_grid, cs_B(H_grid), '-', color=C_B, alpha=0.85, label=r'$B$  spline')
+    axB.plot(H_grid, interp_B(H_grid), '-', color=C_B, alpha=0.85, label=r'$B$  PCHIP')
     axB.errorbar(pt1['H'], pt1['B'],
                  xerr=pt1['sH'], yerr=pt1['sB'],
                  fmt='o', color=C_B, mfc='white', markersize=5,
@@ -344,8 +344,8 @@ def _(CubicSpline, FIG_DIR, np, plt, pt1):
     axB.grid(True, which='major', alpha=0.25)
     axB.grid(True, which='minor', alpha=0.10)
 
-    axMu.plot(Hmu_grid, cs_mu(Hmu_grid), '-', color=C_MU, alpha=0.85,
-              label=r'$\mu_{\mathrm{r}}$  spline')
+    axMu.plot(Hmu_grid, interp_mu(Hmu_grid), '-', color=C_MU, alpha=0.85,
+              label=r'$\mu_{\mathrm{r}}$  PCHIP')
     axMu.errorbar(pt1['H'], pt1['mu_rel'],
                   xerr=pt1['sH'], yerr=pt1['s_mu_rel'],
                   fmt='s', color=C_MU, mfc='white', markersize=5,
@@ -537,7 +537,7 @@ def _(FIG_DIR, RUNS, fits, np, plt):
     for _sheet, _f in fits.items():
         _draw(_sheet, _f)
 
-    ax_fit.set_ylabel(r'$N I / B$   (A·m / T)')
+    ax_fit.set_ylabel(r'$N I / B$   (A / T)')
     ax_fit.set_title(r"Vacuum permeability: $N I / B$ vs width of copper plates")
     ax_fit.legend(loc='upper left')
     ax_fit.minorticks_on()
@@ -545,7 +545,7 @@ def _(FIG_DIR, RUNS, fits, np, plt):
 
     ax_res.axhline(0, color='gray', linestyle='--', linewidth=0.8)
     ax_res.set_xlabel(r"$L'$   (mm)")
-    ax_res.set_ylabel('residual  (A·m / T)')
+    ax_res.set_ylabel('residual  (A / T)')
     ax_res.minorticks_on()
     ax_res.grid(True, which='minor', alpha=0.10)
 
