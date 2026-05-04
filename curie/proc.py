@@ -1297,7 +1297,7 @@ def _(Line2D, diagnostics, np, plt, save_figure, smooth, summary):
 
     ax_methods.axhline(0.5, color="0.45", linestyle="-", linewidth=0.8, alpha=0.55)
     ax_methods.set_xlabel(r"$T$ (K)")
-    ax_methods.set_ylabel("normalized signal")
+    ax_methods.set_ylabel(r"$M/M_\mathrm{sat}$")
     ax_methods.set_ylim(-0.03, 1.03)
     ax_methods.minorticks_on()
     ax_methods.grid(True, which="major", alpha=0.25)
@@ -1391,18 +1391,20 @@ def _(
     MU0,
     RUN_FILES,
     fit_functions,
+    half_height_tc_with_sigma,
+    local_intercept_at,
+    normalize_01_with_sigma,
     np,
     odr_fit,
     pd,
     read_table,
 ):
-    # Cross-run check: re-run the Method-3 chain (background subtraction,
-    # strict 5-point saturation-tail intercepts, M_0^2(T) line fit) on all three
-    # data files. The spread of T_c across runs is a practical empirical
-    # systematic that absorbs whatever the thermometer absolute accuracy,
-    # the warming-vs-cooling thermal lag sign, and the sample-mounting
-    # geometry contribute. This cell deliberately re-uses minimal code
-    # so that a bug in the main pipeline does not silently propagate.
+    # Cross-run check: re-run the same three half-height estimators on all
+    # three physical Curie scans. The guide explicitly asks to repeat the
+    # measurement at different primary resistance / drive-field settings and
+    # discuss the effect, so these scans are treated as controlled-condition
+    # comparisons rather than hidden statistical repeats. The Method-III
+    # M_0^2(T) mean-field fit is still computed per run as a qualitative check.
     # All locals start with an underscore so marimo treats them as
     # cell-private (no clashes with the main-pipeline names above).
     # Same Curie-circuit override as the main pipeline (see top cell).
@@ -1433,7 +1435,7 @@ def _(
         b, sb = float(co[1]), float(np.sqrt(cov[1, 1]))
         return b, sb
 
-    def _run_method3(path):
+    def _run_methods(label, path):
         df = pd.read_csv(path, sep="\t")
         T_K = df["Temperature (C)"].to_numpy(float) + 273.15
         t_s = df["Time (sec)"].to_numpy(float)
@@ -1461,82 +1463,125 @@ def _(
         plateau = float(np.median(hmax[len(hmax) // 2:]))
         ready = np.flatnonzero(hmax >= FIELD_READY_FRACTION * plateau)
         if ready.size == 0:
-            return None
+            return None, []
         keep = np.arange(int(ready[0]), len(df))
+        common_hmax = float(hmax[keep].min())
+        H_sat = 0.98 * common_hmax
 
-        # Use the top quartile of the kept loops as the paramagnetic
-        # regime; matches the main pipeline's choice and avoids the
-        # T >= 273.15 K cut which assumed T_c near room temperature.
-        bg_mask = T_K[keep] >= np.quantile(T_K[keep], 0.75)
+        # Use the top quartile of the full run as the paramagnetic regime,
+        # matching the main pipeline. This avoids a fixed room-temperature
+        # cutoff while keeping the background definition independent of the
+        # eventual T_c estimate.
+        bg_mask = T_K >= np.quantile(T_K, 0.75)
         Hb, Mb = [], []
-        for i in keep[bg_mask]:
+        for i in np.flatnonzero(bg_mask):
             Hp, Mp, Hn, Mn = _branches(df.iloc[i], xp, yp, xn, yn, h_per_x)
             Hb.extend([Hp, Hn])
             Mb.extend([Mp, Mn])
         a_bg, b_bg = np.polyfit(np.concatenate(Hb), np.concatenate(Mb), 1)
 
-        M0 = np.zeros(len(keep))
-        sM0 = np.zeros(len(keep))
-        T_used = np.zeros(len(keep))
-        sT_used = np.zeros(len(keep))
-        for k, i in enumerate(keep):
+        records = []
+        for i in keep:
             Hp, Mp, Hn, Mn = _branches(df.iloc[i], xp, yp, xn, yn, h_per_x)
             Mp_c = Mp - (a_bg * Hp + b_bg)
             Mn_c = Mn - (a_bg * Hn + b_bg)
+
+            Mp_0, sp_0 = local_intercept_at(Hp, Mp_c, 0.0)
+            Mn_0, sn_0 = local_intercept_at(Hn, Mn_c, 0.0)
+            M_r = 0.5 * abs(Mp_0 - Mn_0)
+            sM_r = 0.5 * float(np.hypot(sp_0, sn_0))
+
+            Mp_sat, sp_sat = local_intercept_at(Hp, Mp_c, H_sat)
+            Mn_sat, sn_sat = local_intercept_at(Hn, Mn_c, -H_sat)
+            M_sat = 0.5 * abs(Mp_sat - Mn_sat)
+            sM_sat = 0.5 * float(np.hypot(sp_sat, sn_sat))
+
             bp, sp = _tail_intercept(Hp, Mp_c, "pos")
             bn, sn = _tail_intercept(Hn, Mn_c, "neg")
-            M0[k] = 0.5 * (bp - bn)
-            sM0[k] = 0.5 * float(np.hypot(sp, sn))
-            T_used[k] = T_K[i]
-            sT_used[k] = sT[i]
+            M0 = 0.5 * (bp - bn)
+            sM0 = 0.5 * float(np.hypot(sp, sn))
 
+            records.append({
+                "temperature_K": float(T_K[i]),
+                "sigma_T_K": float(sT[i]),
+                "branch_hmax_A_per_m": float(hmax[i]),
+                "M_r_A_per_m": float(M_r),
+                "sigma_M_r_A_per_m": float(sM_r),
+                "M_sat_A_per_m": float(M_sat),
+                "sigma_M_sat_A_per_m": float(sM_sat),
+                "M_0_A_per_m": float(M0),
+                "sigma_M_0_A_per_m": float(sM0),
+            })
+
+        run_summary = pd.DataFrame.from_records(records)
+        run_summary["M_r_norm"], run_summary["sigma_M_r_norm"] = normalize_01_with_sigma(
+            run_summary["M_r_A_per_m"].to_numpy(),
+            run_summary["sigma_M_r_A_per_m"].to_numpy(),
+        )
+        run_summary["M_sat_norm"], run_summary["sigma_M_sat_norm"] = normalize_01_with_sigma(
+            run_summary["M_sat_A_per_m"].to_numpy(),
+            run_summary["sigma_M_sat_A_per_m"].to_numpy(),
+        )
+        run_summary["M_0_norm"], run_summary["sigma_M_0_norm"] = normalize_01_with_sigma(
+            np.abs(run_summary["M_0_A_per_m"].to_numpy()),
+            run_summary["sigma_M_0_A_per_m"].to_numpy(),
+        )
+
+        T_used = run_summary["temperature_K"].to_numpy()
+        sT_used = run_summary["sigma_T_K"].to_numpy()
+        method_specs = [
+            ("M_r", r"$M_\mathrm{r}$", "M_r_norm", "sigma_M_r_norm"),
+            ("M_sat", r"$M_\mathrm{sat}$", "M_sat_norm", "sigma_M_sat_norm"),
+            ("M_0", r"$M_0$", "M_0_norm", "sigma_M_0_norm"),
+        ]
+        method_rows = []
+        for method_key, method_label, y_col, sy_col in method_specs:
+            tc_half, sigma_tc_half = half_height_tc_with_sigma(
+                T_used,
+                sT_used,
+                run_summary[y_col].to_numpy(),
+                run_summary[sy_col].to_numpy(),
+            )
+            method_rows.append({
+                "run": label,
+                "method_key": method_key,
+                "method": method_label,
+                "Tc_K": float(tc_half),
+                "sigma_Tc_K": float(sigma_tc_half),
+                "drive_current_A_rms": float(I_rms),
+                "H_sat_A_per_m": float(H_sat),
+                "H_median_A_per_m": float(np.median(hmax[keep])),
+                "n_loops": int(len(keep)),
+                "T_min_K": float(T_K.min()),
+                "T_max_K": float(T_K.max()),
+            })
+
+        finite_method_rows = [
+            r for r in method_rows
+            if np.isfinite(r["Tc_K"]) and np.isfinite(r["sigma_Tc_K"])
+        ]
+        if finite_method_rows:
+            _method_tcs = np.array([r["Tc_K"] for r in finite_method_rows], dtype=float)
+            _method_sigmas = np.array([r["sigma_Tc_K"] for r in finite_method_rows], dtype=float)
+            _weights = 1.0 / np.maximum(_method_sigmas, 1e-9) ** 2
+            Tc_methods_mean = float(np.average(_method_tcs, weights=_weights))
+            sigma_Tc_methods_stat = float(1.0 / np.sqrt(np.sum(_weights)))
+            method_spread_run = float(np.std(_method_tcs, ddof=1)) if len(_method_tcs) >= 2 else 0.0
+        else:
+            Tc_methods_mean = float("nan")
+            sigma_Tc_methods_stat = float("nan")
+            method_spread_run = float("nan")
+
+        _method_by_key = {r["method_key"]: r for r in method_rows}
+        Tc_half = _method_by_key.get("M_0", {}).get("Tc_K", float("nan"))
+        sigma_Tc_half = _method_by_key.get("M_0", {}).get("sigma_Tc_K", float("nan"))
+
+        M0 = run_summary["M_0_A_per_m"].to_numpy()
+        sM0 = run_summary["sigma_M_0_A_per_m"].to_numpy()
         Msq = M0**2
         sMsq = 2.0 * np.abs(M0) * sM0
         snr = np.abs(M0) / np.maximum(sM0, 1e-30)
-
-        # Half-height crossing of the normalized M0 curve. This is the
-        # model-free Tc estimator and is also reused as the seed for the
-        # mean-field iterator below. The cross-run systematic budget
-        # uses *this* per-run Tc, not the mean-field one — using the
-        # mean-field Tc per run would double-count the mean-field model
-        # mismatch (which is already captured separately as the
-        # method-to-method spread within a single run).
-        def _crossing_with_sigma(T_arr, sT_arr, y_arr, sy_arr):
-            for j in range(len(T_arr) - 1):
-                y0, y1 = y_arr[j], y_arr[j + 1]
-                if (y0 - 0.5) * (y1 - 0.5) <= 0 and y0 != y1:
-                    T0, T1 = float(T_arr[j]), float(T_arr[j + 1])
-                    dT = T1 - T0
-                    dy = float(y1 - y0)
-                    frac = float((0.5 - y0) / dy)
-                    tc = T0 + frac * dT
-                    d_tc_d_T0 = 1.0 - frac
-                    d_tc_d_T1 = frac
-                    d_tc_d_y0 = (0.5 - y1) * dT / (dy * dy)
-                    d_tc_d_y1 = -(0.5 - y0) * dT / (dy * dy)
-                    sigma = np.sqrt(
-                        (d_tc_d_T0 * sT_arr[j]) ** 2
-                        + (d_tc_d_T1 * sT_arr[j + 1]) ** 2
-                        + (d_tc_d_y0 * sy_arr[j]) ** 2
-                        + (d_tc_d_y1 * sy_arr[j + 1]) ** 2
-                    )
-                    return float(tc), float(sigma)
-            return float("nan"), float("nan")
-
-        order_T = np.argsort(T_used)
-        Ts, M0s = T_used[order_T], M0[order_T]
-        sTs, sM0s = sT_used[order_T], sM0[order_T]
-        M0_pos = np.where(M0s > 0, M0s, 0.0)
-        rng = float(M0_pos.max() - M0_pos.min())
-        Tc_seed = float(np.nanmedian(Ts))
-        Tc_half = float("nan")
-        sigma_Tc_half = float("nan")
-        if rng > 0:
-            yn = (M0_pos - M0_pos.min()) / rng
-            syn = sM0s / rng
-            Tc_half, sigma_Tc_half = _crossing_with_sigma(Ts, sTs, yn, syn)
-            if np.isfinite(Tc_half):
-                Tc_seed = Tc_half
+        Tc_seed = Tc_half if np.isfinite(Tc_half) else float(np.nanmedian(T_used))
 
         # Anchored window-size scan, mirroring the main Method-III check. The
         # candidate pool is anchored to the half-height seed rather than being
@@ -1584,57 +1629,91 @@ def _(
                 "p_value": float(res_K.p_value),
             })
 
-        if not scan:
-            return None
-        acceptable = [r for r in scan if r["p_value"] >= FIT_MIN_P_VALUE]
-        if acceptable:
-            best = max(acceptable, key=lambda r: (r["K"], r["p_value"]))
-        else:
-            best = max(scan, key=lambda r: (r["p_value"], r["K"]))
-        res = best["res"]
-        mask = np.zeros_like(T_used, dtype=bool)
-        mask[best["sel"]] = True
+        Tc = float("nan")
+        sigma_Tc_mf = float("nan")
+        redchi_mf = float("nan")
+        n_fit = 0
+        if scan:
+            acceptable = [r for r in scan if r["p_value"] >= FIT_MIN_P_VALUE]
+            if acceptable:
+                best = max(acceptable, key=lambda r: (r["K"], r["p_value"]))
+            else:
+                best = max(scan, key=lambda r: (r["p_value"], r["K"]))
+            res = best["res"]
+            mask = np.zeros_like(T_used, dtype=bool)
+            mask[best["sel"]] = True
 
-        b0, m0 = float(res.params[0]), float(res.params[1])
-        raw_cov_scale = float(getattr(res.raw_output, "res_var", res.redchi))
-        cov_scale = max(raw_cov_scale, 1.0)
-        if res.cov is not None:
-            cov = res.cov * cov_scale
-            sb0 = float(np.sqrt(max(cov[0, 0], 0.0)))
-            sm0 = float(np.sqrt(max(cov[1, 1], 0.0)))
-            cov_si = float(cov[0, 1])
-        else:
-            sb0, sm0 = float(res.errors[0]), float(res.errors[1])
-            cov_si = 0.0
+            b0, m0 = float(res.params[0]), float(res.params[1])
+            raw_cov_scale = float(getattr(res.raw_output, "res_var", res.redchi))
+            cov_scale = max(raw_cov_scale, 1.0)
+            if res.cov is not None:
+                cov = res.cov * cov_scale
+                sb0 = float(np.sqrt(max(cov[0, 0], 0.0)))
+                sm0 = float(np.sqrt(max(cov[1, 1], 0.0)))
+                cov_si = float(cov[0, 1])
+            else:
+                sb0, sm0 = float(res.errors[0]), float(res.errors[1])
+                cov_si = 0.0
 
-        Tc = -b0 / m0
-        var_Tc = (
-            (sb0 / m0) ** 2
-            + (b0 * sm0 / m0**2) ** 2
-            - 2.0 * b0 * cov_si / m0**3
-        )
+            Tc = -b0 / m0
+            var_Tc = (
+                (sb0 / m0) ** 2
+                + (b0 * sm0 / m0**2) ** 2
+                - 2.0 * b0 * cov_si / m0**3
+            )
+            sigma_Tc_mf = float(np.sqrt(max(0.0, var_Tc)))
+            redchi_mf = float(res.redchi)
+            n_fit = int(mask.sum())
+
         return {
             "Tc_K_mf": Tc,
-            "sigma_Tc_K_mf": float(np.sqrt(max(0.0, var_Tc))),
+            "sigma_Tc_K_mf": sigma_Tc_mf,
             "Tc_K_half": Tc_half,
             "sigma_Tc_K_half": sigma_Tc_half,
+            "Tc_K_methods_mean": Tc_methods_mean,
+            "sigma_Tc_K_methods_stat": sigma_Tc_methods_stat,
+            "method_spread_K": method_spread_run,
+            "Tc_M_r_K": _method_by_key.get("M_r", {}).get("Tc_K", float("nan")),
+            "sigma_Tc_M_r_K": _method_by_key.get("M_r", {}).get("sigma_Tc_K", float("nan")),
+            "Tc_M_sat_K": _method_by_key.get("M_sat", {}).get("Tc_K", float("nan")),
+            "sigma_Tc_M_sat_K": _method_by_key.get("M_sat", {}).get("sigma_Tc_K", float("nan")),
+            "Tc_M_0_K": _method_by_key.get("M_0", {}).get("Tc_K", float("nan")),
+            "sigma_Tc_M_0_K": _method_by_key.get("M_0", {}).get("sigma_Tc_K", float("nan")),
             "drive_current_A_rms": float(I_rms),
+            "H_sat_A_per_m": float(H_sat),
             "H_median_A_per_m": float(np.median(hmax[keep])),
-            "n_fit": int(mask.sum()),
+            "n_fit": n_fit,
             "n_loops": int(len(keep)),
             "T_min_K": float(T_K.min()),
             "T_max_K": float(T_K.max()),
-            "redchi": float(res.redchi),
-        }
+            "redchi": redchi_mf,
+        }, method_rows
 
-    cross_run = pd.DataFrame.from_records([
-        {"run": _label, **(_run_method3(_p) or {})} for _label, _p in RUN_FILES.items()
-    ])
+    _summary_records = []
+    _method_records = []
+    for _label, _path in RUN_FILES.items():
+        _summary, _methods = _run_methods(_label, _path)
+        if _summary is not None:
+            _summary_records.append({"run": _label, **_summary})
+        _method_records.extend(_methods)
+
+    cross_run = pd.DataFrame.from_records(_summary_records)
+    run_method_tcs = pd.DataFrame.from_records(_method_records)
     if "H_median_A_per_m" in cross_run.columns and not cross_run.empty:
         _first_h = float(cross_run.loc[cross_run["run"] == "first", "H_median_A_per_m"].iloc[0])
         cross_run["drive_fraction_vs_first"] = cross_run["H_median_A_per_m"] / _first_h
         cross_run["low_drive_flag"] = cross_run["drive_fraction_vs_first"] < 0.80
-    return (cross_run,)
+        if not run_method_tcs.empty:
+            run_method_tcs["drive_fraction_vs_first"] = run_method_tcs["H_median_A_per_m"] / _first_h
+            run_method_tcs["low_drive_flag"] = run_method_tcs["drive_fraction_vs_first"] < 0.80
+    return cross_run, run_method_tcs
+
+
+@app.cell
+def _(FIG_DIR, cross_run, run_method_tcs):
+    run_method_tcs.to_csv(FIG_DIR / "curie_run_method_tcs.csv", index=False)
+    cross_run.to_csv(FIG_DIR / "curie_cross_run_summary.csv", index=False)
+    return
 
 
 @app.cell(hide_code=True)
@@ -1994,24 +2073,24 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
         method_spread = 0.0
         redchi_combine = float("nan")
 
-    finite_runs = cross_run.dropna(subset=["Tc_K_half"]) if "Tc_K_half" in cross_run.columns else cross_run.iloc[0:0]
-    run_tcs_half_all = finite_runs["Tc_K_half"].to_numpy(dtype=float) if not finite_runs.empty else np.array([])
-    run_spread_all = float(np.std(run_tcs_half_all, ddof=1)) if len(run_tcs_half_all) >= 2 else 0.0
+    _run_estimator_col = "Tc_K_methods_mean" if "Tc_K_methods_mean" in cross_run.columns else "Tc_K_half"
+    finite_runs = cross_run.dropna(subset=[_run_estimator_col]) if _run_estimator_col in cross_run.columns else cross_run.iloc[0:0]
+    run_tcs_all = finite_runs[_run_estimator_col].to_numpy(dtype=float) if not finite_runs.empty else np.array([])
+    run_spread_all = float(np.std(run_tcs_all, ddof=1)) if len(run_tcs_all) >= 2 else 0.0
     if "low_drive_flag" in finite_runs.columns:
         finite_runs_preferred = finite_runs.loc[~finite_runs["low_drive_flag"]]
     else:
         finite_runs_preferred = finite_runs
-    run_tcs_half_preferred = finite_runs_preferred["Tc_K_half"].to_numpy(dtype=float) if not finite_runs_preferred.empty else np.array([])
-    run_spread = float(np.std(run_tcs_half_preferred, ddof=1)) if len(run_tcs_half_preferred) >= 2 else run_spread_all
+    run_tcs_preferred = finite_runs_preferred[_run_estimator_col].to_numpy(dtype=float) if not finite_runs_preferred.empty else np.array([])
+    run_spread = float(np.std(run_tcs_preferred, ddof=1)) if len(run_tcs_preferred) >= 2 else run_spread_all
 
     # Systematic budget: combines the inter-method spread (within-run
     # methodological systematic), the run-to-run spread of the *half-height*
     # T_c per run (cross-run systematic on the same estimator family), and
-    # the fully-correlated thermometer absolute-accuracy term. The low-drive
-    # third run is kept in the table but not in the preferred run-spread term
-    # because Method III assumes a saturated tail; the low drive makes that
-    # assumption visibly weaker. The all-run spread is still reported as a
-    # conservative alternative.
+    # the fully-correlated thermometer absolute-accuracy term. The preferred
+    # high-drive budget excludes the low-drive third run; the guide-facing
+    # conservative budget retains all three drive settings as a field-amplitude
+    # systematic rather than hiding that scan.
     # The mean-field-vs-half-height shift is NOT
     # added in quadrature here: the mean-field model is not adopted as
     # the headline estimator (its narrow-window linear approximation
@@ -2023,22 +2102,33 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
     # cross-check; the methodological tension within each run is
     # already captured by sigma_method.
     syst_total = float(np.hypot(np.hypot(method_spread, run_spread), SIGMA_T_ABS_K))
+    syst_total_all = float(np.hypot(np.hypot(method_spread, run_spread_all), SIGMA_T_ABS_K))
     # Display only: gap between the failing mean-field fit and the
     # half-height headline, kept for context but not in the systematic.
     mf_shift_display = float(abs(Tc_K - Tc_headline)) if np.isfinite(Tc_K) and np.isfinite(Tc_headline) else 0.0
 
-    def _row_half(r):
-        _name = f"Method 3 half-height, run `{r['run']}`"
-        _stc = r["sigma_Tc_K_half"]
-        stc_str = f"{_stc:.2f}" if np.isfinite(_stc) else "—"
+    def _fmt_k(x, ndigits=1):
+        return f"{x:.{ndigits}f}" if np.isfinite(x) else "—"
+
+    def _row_run(r):
+        _name = f"run `{r['run']}`"
         _frac = r.get("drive_fraction_vs_first", np.nan)
         _drive_str = f"{_frac:.2f}" if np.isfinite(_frac) else "—"
         _flag = "low-drive check" if bool(r.get("low_drive_flag", False)) else "preferred"
-        return f"| {_name} | {r['Tc_K_half']:.2f} | {stc_str} | {int(r['n_loops'])} | {_drive_str} | {r['redchi']:.1f} | {_flag} |"
+        return "| " + " | ".join([
+            _name,
+            f"{r['drive_current_A_rms']:.2f}",
+            _drive_str,
+            _fmt_k(r.get("Tc_M_r_K", np.nan)),
+            _fmt_k(r.get("Tc_M_sat_K", np.nan)),
+            _fmt_k(r.get("Tc_M_0_K", np.nan)),
+            _fmt_k(r.get("Tc_K_methods_mean", np.nan)),
+            _flag,
+        ]) + " |"
 
-    cross_rows_half = [
-        _row_half(r)
-        for _, r in finite_runs.iterrows() if np.isfinite(r["Tc_K_half"])
+    cross_rows_methods = [
+        _row_run(r)
+        for _, r in finite_runs.iterrows() if np.isfinite(r[_run_estimator_col])
     ]
 
     method_rows = [
@@ -2058,23 +2148,28 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
     |---|---|---|---|
     {chr(10).join(method_rows)}
 
-    **Half-height crossings of $M_0$ across the three runs** (cross-run check on the same estimator):
+    **All three physical Curie scans** (repeated at different primary drive settings):
 
-    | Run | $T_c^\mathrm{{half}}$ (K) | local $\sigma_{{T_c}}$ (K) | n_loops | drive fraction | mean-field $\chi^2/\nu$ | status |
-    |---|---|---|---|---|---|---|
-    {chr(10).join(cross_rows_half)}
+    | Run | $I_\mathrm{{rms}}$ (A) | drive frac. | $M_r$ (K) | $M_\mathrm{{sat}}$ (K) | $M_0$ (K) | method mean (K) | status |
+    |---|---|---|---|---|---|---|---|
+    {chr(10).join(cross_rows_methods)}
 
-    The low-drive third run is kept as a diagnostic, but the preferred
-    run-spread term below uses only the high-drive `first` and `second`
-    runs. Including all three gives a conservative all-drive spread of
+    The low-drive third run is not an interchangeable repeat: it is the
+    required different-resistance scan and shows field-amplitude sensitivity.
+    The preferred high-drive run-spread term uses only `first` and `second`,
+    while the reported conservative all-drive budget retains all three scans:
+    $\sigma_\text{{run}}={run_spread:.1f}\,\mathrm{{K}}$ versus
     $\sigma_\text{{run,all}}={run_spread_all:.1f}\,\mathrm{{K}}$.
 
-    **Headline value (apparent half-height transition across methods 1, 2, 3-normalized, run `first`):**
+    **Reported value (central value from run `first`; uncertainty retains all drive settings):**
 
     $$
-    T_c^\mathrm{{app}} \;=\; {Tc_headline:.0f} \;\pm\; {syst_total:.0f}\;\mathrm{{K}}
-    \;=\; {Tc_headline_C:.0f}\pm{syst_total:.0f}\,^\circ\mathrm{{C}}.
+    T_c^\mathrm{{app}} \;=\; {Tc_headline:.0f} \;\pm\; {syst_total_all:.0f}\;\mathrm{{K}}
+    \;=\; {Tc_headline_C:.0f}\pm{syst_total_all:.0f}\,^\circ\mathrm{{C}}.
     $$
+
+    If the low-drive scan is treated only as a diagnostic, the high-drive
+    preferred budget would be $\pm{syst_total:.0f}\,\mathrm{{K}}$ instead.
 
     This is an operational finite-field transition midpoint, not a clean
     zero-field thermodynamic Curie temperature. The local crossing
@@ -2083,10 +2178,10 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
     The unrounded local repeatability of the common pipeline is
     $\sigma={sigma_Tc_headline_stat:.2f}\,\mathrm{{K}}$.
 
-    The quoted uncertainty combines
+    The conservative quoted uncertainty combines
 
     - method-to-method spread of the half-height crossings within run `first`: $\sigma_\text{{method}}={method_spread:.1f}\,\mathrm{{K}}$;
-    - run-to-run spread of the half-height $T_c$ on the preferred high-drive sweeps: $\sigma_\text{{run}}={run_spread:.1f}\,\mathrm{{K}}$;
+    - run-to-run spread of the per-run three-method estimates across all drive settings: $\sigma_\text{{run,all}}={run_spread_all:.1f}\,\mathrm{{K}}$;
     - thermometer absolute-accuracy term: $\sigma_\text{{therm}}={SIGMA_T_ABS_K:.1f}\,\mathrm{{K}}$;
 
     in quadrature.
@@ -2144,8 +2239,10 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
         method_spread,
         mf_shift_display,
         run_spread,
+        run_spread_all,
         sigma_Tc_headline_stat,
         syst_total,
+        syst_total_all,
     )
 
 
@@ -2154,22 +2251,27 @@ def _(
     Tc_CW,
     Tc_K,
     Tc_headline,
-    cross_run,
-    diagnostics_with_sigma,
     np,
     plt,
+    run_method_tcs,
     save_figure,
     sigma_Tc_CW,
     sigma_Tc_K,
     sigma_Tc_headline_stat,
     syst_total,
+    syst_total_all,
 ):
     _fig_tc, _ax_tc = plt.subplots(figsize=(7.8, 4.8), constrained_layout=True)
 
+    if np.isfinite(Tc_headline) and np.isfinite(syst_total_all):
+        _ax_tc.axhspan(
+            Tc_headline - syst_total_all, Tc_headline + syst_total_all,
+            color="C0", alpha=0.06, label=r"reported all-drive uncertainty",
+        )
     if np.isfinite(Tc_headline) and np.isfinite(syst_total):
         _ax_tc.axhspan(
             Tc_headline - syst_total, Tc_headline + syst_total,
-            color="C0", alpha=0.08, label=r"headline $\pm$ quoted uncertainty",
+            color="C0", alpha=0.12, label=r"high-drive-only uncertainty",
         )
     if np.isfinite(Tc_headline) and np.isfinite(sigma_Tc_headline_stat):
         _ax_tc.axhspan(
@@ -2186,34 +2288,40 @@ def _(
     _x_labels = []
     _group_edges = []  # (x_left, x_right, label)
 
-    _finite_methods = diagnostics_with_sigma.dropna(subset=["Tc_K"])
-    _method_labels = [r"$M_\mathrm{r}$", r"$M_\mathrm{sat}$", r"$M_0$"]
-    _group_left_I = 0
-    for _x, (_, _row) in enumerate(_finite_methods.iterrows()):
-        _ax_tc.errorbar(
-            _x, _row["Tc_K"], yerr=_row["sigma_Tc_K"],
-            fmt="o", color="C0", ecolor="C0", capsize=3, markersize=6,
-            label="run first: half-height (1, 2, 3)" if _x == 0 else None,
-        )
-        _x_positions.append(_x)
-        _x_labels.append(_method_labels[_x] if _x < len(_method_labels) else _row["method"])
-    _group_edges.append((_group_left_I, len(_x_positions) - 1, "Methods 1–3"))
-
-    _finite_runs = cross_run.dropna(subset=["Tc_K_half"]) if "Tc_K_half" in cross_run.columns else cross_run.iloc[0:0]
-    _start = len(_x_positions) + 1
-    _group_left_R = _start
+    _finite_run_methods = run_method_tcs.dropna(subset=["Tc_K"]) if "Tc_K" in run_method_tcs.columns else run_method_tcs.iloc[0:0]
+    _run_order = ["first", "second", "third"]
     _run_label_map = {"first": "Run 1", "second": "Run 2", "third": "Run 3"}
-    for _j, (_, _row) in enumerate(_finite_runs.iterrows()):
-        _x = _start + _j
-        _ax_tc.errorbar(
-            _x, _row["Tc_K_half"], yerr=_row["sigma_Tc_K_half"],
-            fmt="s", color="C2", ecolor="C2", capsize=3, markersize=6,
-            label=r"cross-run $M_0$ half-height" if _j == 0 else None,
-        )
-        _x_positions.append(_x)
-        _x_labels.append(_run_label_map.get(str(_row["run"]), str(_row["run"])))
-    if _finite_runs.shape[0]:
-        _group_edges.append((_group_left_R, _x_positions[-1], "Run 1/2/3"))
+    _run_color_map = {"first": "C0", "second": "C2", "third": "C6"}
+    _method_order = ["M_r", "M_sat", "M_0"]
+    _method_label_map = {"M_r": r"$M_\mathrm{r}$", "M_sat": r"$M_\mathrm{sat}$", "M_0": r"$M_0$"}
+    _method_marker_map = {"M_r": "o", "M_sat": "s", "M_0": "^"}
+    _x = 0.0
+    for _run in _run_order:
+        _rows_run = _finite_run_methods.loc[_finite_run_methods["run"] == _run]
+        if _rows_run.empty:
+            continue
+        _group_left = _x
+        _color = _run_color_map.get(_run, "0.4")
+        _run_label = _run_label_map.get(_run, _run)
+        _low_drive = bool(_rows_run["low_drive_flag"].iloc[0]) if "low_drive_flag" in _rows_run.columns else False
+        _legend_label = _run_label + (" (low drive)" if _low_drive else "")
+        for _method in _method_order:
+            _row_match = _rows_run.loc[_rows_run["method_key"] == _method]
+            if _row_match.empty:
+                continue
+            _row = _row_match.iloc[0]
+            _ax_tc.errorbar(
+                _x, _row["Tc_K"], yerr=_row["sigma_Tc_K"],
+                fmt=_method_marker_map.get(_method, "o"), color=_color, ecolor=_color,
+                capsize=3, markersize=6,
+                mfc="white" if _low_drive else _color,
+                label=_legend_label if _method == _method_order[0] else None,
+            )
+            _x_positions.append(_x)
+            _x_labels.append(_method_label_map.get(_method, _method))
+            _x += 1.0
+        _group_edges.append((_group_left, _x - 1.0, _run_label))
+        _x += 0.85
 
     _x = (_x_positions[-1] + 1.5) if _x_positions else 0.0
     _group_left_X = _x
@@ -2234,7 +2342,7 @@ def _(
         )
         _x_positions.append(_x)
         _x_labels.append(r"CW")
-    if _x_positions[-1] >= _group_left_X:
+    if _x_positions and _x_positions[-1] >= _group_left_X:
         _group_edges.append((_group_left_X, _x_positions[-1], "Cross-checks"))
 
     # Light vertical separators between the three groups for readability.
@@ -2255,16 +2363,14 @@ def _(
     # the bar at the axis edge, which is acceptable since the legend
     # quotes the value and the markdown reports the full number.
     _all_centers = []
-    for _, _r in _finite_methods.iterrows():
+    for _, _r in _finite_run_methods.iterrows():
         _all_centers.append(float(_r["Tc_K"]))
-    for _, _r in _finite_runs.iterrows():
-        _all_centers.append(float(_r["Tc_K_half"]))
     if np.isfinite(Tc_K):
         _all_centers.append(float(Tc_K))
     if np.isfinite(Tc_CW):
         _all_centers.append(float(Tc_CW))
     if _all_centers:
-        _y_lo = min(_all_centers + [Tc_headline - syst_total]) - 5.0
+        _y_lo = min(_all_centers + [Tc_headline - syst_total_all]) - 5.0
         _y_hi = max(_all_centers + [Tc_K + sigma_Tc_K]) + 5.0
         _ax_tc.set_ylim(_y_lo, _y_hi)
 
