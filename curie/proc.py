@@ -159,63 +159,6 @@ def _():
 
 
 @app.cell
-def _(Line2D, np, plt, save_figure):
-    # Guide-style schematic: mean-field magnetization in zero and finite
-    # applied field. This is not fitted to the Monel data; it is a compact
-    # visual explanation for why scans taken at different drive amplitudes
-    # are not interchangeable statistical repeats.
-    tau = np.linspace(0.05, 2.3, 600)  # T / Tc
-    fields = [0.0, 0.01, 0.04, 0.12]
-
-    def mean_field_branch(h):
-        m_values = np.empty_like(tau)
-        m = 1.0
-        for i, t in enumerate(tau):
-            for _ in range(3000):
-                m_next = np.tanh((h + m) / t)
-                if abs(m_next - m) < 1e-11:
-                    m = float(m_next)
-                    break
-                m = 0.55 * m + 0.45 * float(m_next)
-            m_values[i] = m
-        return m_values
-
-    fig_mf, ax_mf = plt.subplots(figsize=(5.4, 3.5), constrained_layout=True)
-    colors = ["0.05", "#234cff", "#2446d8", "#1f3aaa"]
-    linewidths = [2.4, 2.0, 2.2, 2.4]
-    for h, color, linewidth in zip(fields, colors, linewidths):
-        m = mean_field_branch(h)
-        if h == 0.0:
-            ax_mf.plot(tau, m, color=color, linestyle="--", linewidth=linewidth)
-        else:
-            ax_mf.plot(tau, m, color=color, linewidth=linewidth)
-
-    ax_mf.annotate(
-        "increasing\nfield",
-        xy=(1.75, 0.83), xytext=(1.38, 0.38),
-        arrowprops={"arrowstyle": "-|>", "connectionstyle": "arc3,rad=-0.35", "lw": 1.2, "color": "0.1"},
-        ha="center", va="center", fontsize=9,
-    )
-    ax_mf.set_xlabel(r"$T/T_\mathrm{c}$")
-    ax_mf.set_ylabel(r"$M/M_\mathrm{sat}$")
-    ax_mf.set_xlim(0.0, 2.3)
-    ax_mf.set_ylim(-0.03, 1.03)
-    ax_mf.minorticks_on()
-    ax_mf.grid(True, which="major", alpha=0.20)
-    ax_mf.grid(True, which="minor", alpha=0.08)
-    ax_mf.legend(
-        handles=[
-            Line2D([0], [0], color="0.05", linestyle="--", linewidth=2.4, label=r"$H=0$"),
-            Line2D([0], [0], color="#234cff", linewidth=2.4, label=r"$H\ne0$"),
-        ],
-        loc="lower left", framealpha=0.95,
-    )
-    save_figure(fig_mf, "curie_mean_field_broadening")
-    fig_mf
-    return
-
-
-@app.cell
 def _(DATA_FILE, DATA_XLSX, mo, np, pd, read_table):
     data = pd.read_csv(DATA_FILE, sep="\t")
     apparatus = read_table(DATA_XLSX, sheet_name="apparatus").iloc[0]
@@ -1520,7 +1463,7 @@ def _(
         plateau = float(np.median(hmax[len(hmax) // 2:]))
         ready = np.flatnonzero(hmax >= FIELD_READY_FRACTION * plateau)
         if ready.size == 0:
-            return None, []
+            return None, [], []
         keep = np.arange(int(ready[0]), len(df))
         common_hmax = float(hmax[keep].min())
         H_sat = 0.98 * common_hmax
@@ -1722,6 +1665,23 @@ def _(
             redchi_mf = float(res.redchi)
             n_fit = int(mask.sum())
 
+        run_curve_records = []
+        for _record in run_summary.to_dict("records"):
+            run_curve_records.append({
+                "run": label,
+                "drive_current_A_rms": float(I_rms),
+                "H_sat_A_per_m": float(H_sat),
+                "H_median_A_per_m": float(np.median(hmax[keep])),
+                "temperature_K": float(_record["temperature_K"]),
+                "sigma_T_K": float(_record["sigma_T_K"]),
+                "M_r_norm": float(_record["M_r_norm"]),
+                "sigma_M_r_norm": float(_record["sigma_M_r_norm"]),
+                "M_sat_norm": float(_record["M_sat_norm"]),
+                "sigma_M_sat_norm": float(_record["sigma_M_sat_norm"]),
+                "M_0_norm": float(_record["M_0_norm"]),
+                "sigma_M_0_norm": float(_record["sigma_M_0_norm"]),
+            })
+
         return {
             "Tc_K_mf": Tc,
             "sigma_Tc_K_mf": sigma_Tc_mf,
@@ -1744,32 +1704,96 @@ def _(
             "T_min_K": float(T_K.min()),
             "T_max_K": float(T_K.max()),
             "redchi": redchi_mf,
-        }, method_rows
+        }, method_rows, run_curve_records
 
     _summary_records = []
+    _curve_records = []
     _method_records = []
     for _label, _path in RUN_FILES.items():
-        _summary, _methods = _run_methods(_label, _path)
+        _summary, _methods, _curves = _run_methods(_label, _path)
         if _summary is not None:
             _summary_records.append({"run": _label, **_summary})
         _method_records.extend(_methods)
+        _curve_records.extend(_curves)
 
     cross_run = pd.DataFrame.from_records(_summary_records)
+    run_curves = pd.DataFrame.from_records(_curve_records)
     run_method_tcs = pd.DataFrame.from_records(_method_records)
     if "H_median_A_per_m" in cross_run.columns and not cross_run.empty:
         _first_h = float(cross_run.loc[cross_run["run"] == "first", "H_median_A_per_m"].iloc[0])
         cross_run["drive_fraction_vs_first"] = cross_run["H_median_A_per_m"] / _first_h
         cross_run["low_drive_flag"] = cross_run["drive_fraction_vs_first"] < 0.80
+        if not run_curves.empty:
+            run_curves["drive_fraction_vs_first"] = run_curves["H_median_A_per_m"] / _first_h
+            run_curves["low_drive_flag"] = run_curves["drive_fraction_vs_first"] < 0.80
         if not run_method_tcs.empty:
             run_method_tcs["drive_fraction_vs_first"] = run_method_tcs["H_median_A_per_m"] / _first_h
             run_method_tcs["low_drive_flag"] = run_method_tcs["drive_fraction_vs_first"] < 0.80
-    return cross_run, run_method_tcs
+    return cross_run, run_curves, run_method_tcs
 
 
 @app.cell
-def _(FIG_DIR, cross_run, run_method_tcs):
+def _(FIG_DIR, cross_run, run_curves, run_method_tcs):
+    run_curves.to_csv(FIG_DIR / "curie_run_curves.csv", index=False)
     run_method_tcs.to_csv(FIG_DIR / "curie_run_method_tcs.csv", index=False)
     cross_run.to_csv(FIG_DIR / "curie_cross_run_summary.csv", index=False)
+    return
+
+
+@app.cell
+def _(cross_run, np, plt, run_curves, save_figure, smooth):
+    # Measured counterpart to the guide's finite-field sketch. We plot the
+    # near-saturation branch-split proxy because it is evaluated at the drive
+    # field itself, so it is the cleanest visual comparison of the three input
+    # settings. The x-axis uses the main-run method-mean half-height as the
+    # common temperature scale; normalizing each run by its own transition
+    # would hide the observed drive-setting shifts.
+    fig_drive, ax_drive = plt.subplots(figsize=(7.2, 4.4), constrained_layout=True)
+
+    _first = cross_run.loc[cross_run["run"] == "first"]
+    _T_ref = float(_first["Tc_K_methods_mean"].iloc[0]) if not _first.empty else float(cross_run["Tc_K_methods_mean"].iloc[0])
+    _run_order = ["third", "first", "second"]
+    _color_map = {"third": "#66a9ff", "first": "#1f77b4", "second": "#08306b"}
+    _marker_map = {"third": "^", "first": "o", "second": "s"}
+
+    for _run in _run_order:
+        _rows = run_curves.loc[run_curves["run"] == _run].sort_values("temperature_K")
+        if _rows.empty:
+            continue
+        _x = _rows["temperature_K"].to_numpy(float) / _T_ref
+        _y = _rows["M_sat_norm"].to_numpy(float)
+        _h_frac = float(_rows["drive_fraction_vs_first"].iloc[0])
+        _current = float(_rows["drive_current_A_rms"].iloc[0])
+        _label = rf"{_run}: $I={_current:.2f}\,$A, $H/H_1={_h_frac:.2f}$"
+        ax_drive.plot(
+            _x, smooth(_y),
+            color=_color_map.get(_run, "0.3"), linewidth=2.2,
+            label=_label,
+        )
+        _stride = max(1, len(_x) // 45)
+        ax_drive.scatter(
+            _x[::_stride], _y[::_stride],
+            color=_color_map.get(_run, "0.3"), marker=_marker_map.get(_run, "o"),
+            s=13, alpha=0.42, linewidths=0.0,
+        )
+
+    ax_drive.axhline(0.5, color="0.45", linewidth=0.8, linestyle="--", alpha=0.65)
+    ax_drive.axvline(1.0, color="0.35", linewidth=0.9, linestyle=":", alpha=0.85)
+    ax_drive.text(
+        1.005, 0.08,
+        r"run-1 $T_{1/2}^{\mathrm{app}}$",
+        rotation=90, ha="left", va="bottom", color="0.25", fontsize=8,
+    )
+    ax_drive.set_xlabel(r"$T / T_{1/2}^{\mathrm{app}}$ (run 1)")
+    ax_drive.set_ylabel(r"normalized $M_\mathrm{sat}(T)$")
+    ax_drive.set_xlim(0.75, 1.45)
+    ax_drive.set_ylim(-0.03, 1.03)
+    ax_drive.minorticks_on()
+    ax_drive.grid(True, which="major", alpha=0.24)
+    ax_drive.grid(True, which="minor", alpha=0.10)
+    ax_drive.legend(loc="upper right", framealpha=0.95, fontsize=8)
+    save_figure(fig_drive, "curie_measured_drive_comparison")
+    fig_drive
     return
 
 
