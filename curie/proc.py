@@ -211,8 +211,8 @@ def _(DATA_FILE, DATA_XLSX, mo, np, pd, read_table):
     # during which the sample temperature drifts by |dT/dt|*dt_loop. We
     # treat that drift as a uniform window centred on the logged T, so
     # sigma_T_smear = |dT/dt|*dt_loop / sqrt(12). The LabVIEW T resolution
-    # is 1 mK (sigma_T_resolution ~ 0.3 mK), negligible against the smearing
-    # in the transition region (~0.3-0.4 K). The thermometer absolute
+    # is 1 mK (sigma_T_resolution ~ 0.3 mK), negligible against the heating-rate
+    # smearing near the transition. The thermometer absolute
     # accuracy is treated separately as a fully-correlated systematic
     # because it shifts T_c rigidly within a single run.
     _t_s = data["Time (sec)"].to_numpy(float)
@@ -241,7 +241,7 @@ def _(DATA_FILE, DATA_XLSX, mo, np, pd, read_table):
     - samples per branch: `{len(X_POS)}`
     - temperature range: `{temperature_K.min():.3f}` to `{temperature_K.max():.3f}` K
     - calibration constants: `H/Vx = {H_PER_X:.6g} A m^-1 V^-1`, `B/Vy = {B_PER_Y:.6g} T V^-1`
-    - loop window: `{_dt_loop:.2f}` s; per-loop $\sigma_T$ in transition region (median, p95): `{np.median(sigma_T_K):.3f}`, `{np.percentile(sigma_T_K, 95):.3f}` K
+    - loop window: `{_dt_loop:.2f}` s; per-loop $\sigma_T$ over the raw run (median, p95): `{np.median(sigma_T_K):.3f}`, `{np.percentile(sigma_T_K, 95):.3f}` K
 
     The Curie circuit constants are hard-coded to match the lab schematic
     ($N_1=250$ primary, $N_2=2500$ secondary, $R_y=3.97\,\mathrm{{k\Omega}}$,
@@ -887,10 +887,10 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, pd, summary):
     #   3. Sort the pool by T descending so the points closest to Tc
     #      (where mean-field is asymptotically valid) come first.
     #   4. Sweep K = K_MIN .. K_MAX and run a weighted line fit on the top-K
-    #      points; record (K, Tc_K, chi^2/nu, p-value).
+    #      points; record (K, Tc_K, chi^2/nu, p-probability).
     #   5. Keep only physical fits: negative slope and a zero crossing
     #      close to the seed. Among statistically acceptable fits, pick
-    #      the largest K; otherwise pick the best p-value physical fit.
+    #      the largest K; otherwise pick the best p-probability physical fit.
     #
     # K_MIN = 5 is the lab guide's prescription. K_MAX is bounded by
     # the candidate-pool size; this is large enough that the optimum
