@@ -64,7 +64,8 @@ def _(mo):
     The half-height crossings are local derived quantities, not fitted physical
     models. The two cross-check models in this notebook are the weighted line
     fits of $M_0^2(T)$ and apparent Curie-Weiss $1/\chi(T)$; both report fit
-    parameters, relative errors, $\chi^2/\nu$, p-probability, DOF, and residuals.
+    parameters, relative errors, $\chi^2/\nu$, p-probability, DOF, and
+    data-minus-fit panels.
     """)
     return
 
@@ -1089,17 +1090,25 @@ def _(
 
     scale = 1e6  # (A/m)^2 -> (kA/m)^2
 
-    # Bound the visible region to the meaningful transition window:
-    # x goes from ~10 K below the half-height headline up to a few K
-    # past the mean-field Tc; y reaches just high enough to show the
-    # curving low-T tail that motivates keeping the fitted window narrow without
-    # being dominated by the deep-T spike.
+    # Bound the visible region to the meaningful transition window while
+    # keeping every fitted point visible.
     _T_in = T_all[fit_mask]
     _x_lo = (Tc_headline - 10.0) if np.isfinite(Tc_headline) else float(_T_in.min()) - 10.0
-    _x_hi = Tc_K + 5.0
-    _y_curve_max = float(M0_sq_all[(T_all >= _x_lo) & ~fit_mask].max() / scale) if (~fit_mask).any() else 1.0
-    _y_hi = max(0.5, 1.05 * min(_y_curve_max, 5.0))  # cap visible curve at ~5 kA^2/m^2
-    _y_lo = -0.05 * _y_hi
+    if _T_in.size:
+        _x_lo = min(_x_lo, float(_T_in.min()) - 1.0)
+        _x_hi = max(Tc_K + 5.0, float(_T_in.max()) + 1.0)
+        T_line = np.linspace(float(_T_in.min()), Tc_K, 200)
+    else:
+        _x_hi = Tc_K + 5.0
+        T_line = np.linspace(_x_lo, Tc_K, 200)
+    _line_y = (msq_slope * T_line + msq_intercept) / scale
+    _fit_y = M0_sq_all[fit_mask] / scale
+    _fit_sy = sM0_sq_all[fit_mask] / scale
+    _y_candidates = [_line_y]
+    if _fit_y.size:
+        _y_candidates.append(_fit_y + _fit_sy)
+    _y_hi = max(0.5, 1.08 * float(np.nanmax(np.concatenate(_y_candidates))))
+    _y_lo = -0.03 * _y_hi
 
     # Shade the fitted window in T so the reader can see at a
     # glance which points fed the line.
@@ -1124,9 +1133,8 @@ def _(
         alpha=0.9, label=rf"fit window ($K^{{*}}={K_best}$ pts)",
     )
 
-    T_line = np.linspace(float(_T_in.min()), Tc_K + 3.0, 200)
     ax_msq.plot(
-        T_line, (msq_slope * T_line + msq_intercept) / scale,
+        T_line, _line_y,
         "-", color="C3", linewidth=2.0,
         label=rf"mean-field $T_c={Tc_K:.1f}\pm{sigma_Tc_K:.1f}\,\mathrm{{K}}$",
     )
@@ -1172,7 +1180,7 @@ def _(
     ax_msq.legend(loc="upper right", fontsize=8, framealpha=0.95)
 
     ax_msq_res.set_xlabel(r"$T$ (K)")
-    ax_msq_res.set_ylabel("residual\n" + r"(kA$^2\,$m$^{-2}$)")
+    ax_msq_res.set_ylabel(r"$M_0^2 - f(T)$" + "\n" + r"(kA$^2\,$m$^{-2}$)")
     ax_msq_res.minorticks_on()
     ax_msq_res.grid(True, which="major", alpha=0.25)
     ax_msq_res.grid(True, which="minor", alpha=0.10)
@@ -1870,16 +1878,55 @@ def _(
         if _used.any():
             _residual = _inv_chi_all[_used] - (m_CW * _T_all[_used] + b_CW)
             _residual_sigma = _sigma_inv_all[_used]
+            _safe_sigma = np.where(_residual_sigma > 0, _residual_sigma, np.nan)
+            _weighted_residual = _residual / _safe_sigma
             ax_cw_res.errorbar(
-                _T_all[_used], _residual,
-                xerr=_sigma_T_all[_used], yerr=_residual_sigma,
+                _T_all[_used], _weighted_residual,
+                xerr=_sigma_T_all[_used], yerr=np.ones_like(_weighted_residual),
                 fmt="o", color="C0", markersize=3.2, elinewidth=0.8,
                 alpha=0.9,
             )
-            _res_ylim = float(np.nanmax(np.abs(_residual) + _residual_sigma))
+            _res_ylim = float(np.nanmax(np.abs(_weighted_residual) + 1.0))
             if not np.isfinite(_res_ylim) or _res_ylim <= 0:
                 _res_ylim = 1.0
             ax_cw_res.set_ylim(-1.15 * _res_ylim, 1.15 * _res_ylim)
+
+            _zoom_x_lo = max(_x_lo, Tc_CW - 0.5)
+            _zoom_x_hi = min(_x_hi, _edge + 8.0)
+            _zoom = (_T_all >= _zoom_x_lo) & (_T_all <= _zoom_x_hi)
+            if np.count_nonzero(_zoom & _used) >= 2:
+                ax_zoom = ax_cw.inset_axes([0.52, 0.10, 0.43, 0.42])
+                if np.any(_zoom & _excl):
+                    ax_zoom.errorbar(
+                        _T_all[_zoom & _excl], _inv_chi_all[_zoom & _excl],
+                        xerr=_sigma_T_all[_zoom & _excl], yerr=_sigma_inv_all[_zoom & _excl],
+                        fmt="o", color="0.55", markersize=2.2, elinewidth=0.45,
+                        alpha=0.65,
+                    )
+                ax_zoom.errorbar(
+                    _T_all[_zoom & _used], _inv_chi_all[_zoom & _used],
+                    xerr=_sigma_T_all[_zoom & _used], yerr=_sigma_inv_all[_zoom & _used],
+                    fmt="o", color="C0", markersize=2.5, elinewidth=0.5,
+                    alpha=0.85,
+                )
+                _T_zoom_line = np.linspace(max(Tc_CW, _zoom_x_lo), _zoom_x_hi, 100)
+                _zoom_line_y = m_CW * _T_zoom_line + b_CW
+                ax_zoom.plot(_T_zoom_line, _zoom_line_y, "-", color="C3", linewidth=1.3)
+                ax_zoom.axhline(0, color="0.45", linewidth=0.5, linestyle="--")
+                ax_zoom.axvline(Tc_CW, color="C3", linewidth=0.6, linestyle=":")
+                _zoom_y = _inv_chi_all[_zoom]
+                _zoom_sigma = _sigma_inv_all[_zoom]
+                _zoom_y_hi = max(
+                    0.5,
+                    float(np.nanmax(_zoom_y + _zoom_sigma)),
+                    float(np.nanmax(_zoom_line_y)),
+                )
+                _zoom_y_lo = min(0.0, float(np.nanmin(_zoom_line_y)))
+                ax_zoom.set_xlim(_zoom_x_lo, _zoom_x_hi)
+                ax_zoom.set_ylim(_zoom_y_lo - 0.05 * _zoom_y_hi, 1.15 * _zoom_y_hi)
+                ax_zoom.set_title("near-intercept zoom", fontsize=7)
+                ax_zoom.tick_params(labelsize=7)
+                ax_zoom.grid(True, which="major", alpha=0.20)
 
     ax_cw.axhline(0, color="0.4", linewidth=0.6, linestyle="--")
     ax_cw_res.axhline(0, color="0.35", linewidth=0.8, linestyle="--")
@@ -1893,7 +1940,7 @@ def _(
     ax_cw.legend(loc="upper left", fontsize=8, framealpha=0.95)
 
     ax_cw_res.set_xlabel(r"$T$ (K)")
-    ax_cw_res.set_ylabel("residual\n(arb. units)")
+    ax_cw_res.set_ylabel(r"$(1/\chi - f(T))/\sigma$")
     ax_cw_res.minorticks_on()
     ax_cw_res.grid(True, which="major", alpha=0.25)
     ax_cw_res.grid(True, which="minor", alpha=0.10)

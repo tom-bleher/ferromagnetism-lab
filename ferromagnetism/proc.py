@@ -55,7 +55,7 @@ def _(mo):
 
     The copper-gap measurement is the only fitted model in this notebook. For
     that fit the notebook reports the fit parameters, relative errors,
-    $\chi^2/\nu$, p-probability, DOF, and a residuals plot. The smooth curves in
+    $\chi^2/\nu$, p-probability, DOF, and a data-minus-fit plot. The smooth curves in
     Part A are only guide curves through the measured envelope points; they are
     not fitted physical models.
     """)
@@ -347,8 +347,13 @@ def _(FIG_DIR, PchipInterpolator, np, plt, pt1):
     Hmu_grid = np.linspace(H_mu.min(), H_mu.max(), 500)
     peak_idx = pt1['mu_rel'].idxmax()
 
-    fig, axB = plt.subplots(figsize=(9.2, 5.4), constrained_layout=True)
-    axMu = axB.twinx()
+    fig, (axB, axMu) = plt.subplots(
+        2, 1,
+        figsize=(8.8, 6.2),
+        sharex=True,
+        constrained_layout=True,
+        gridspec_kw={'height_ratios': [1.25, 1.0]},
+    )
 
     C_B, C_MU = 'C0', 'C3'
 
@@ -357,13 +362,11 @@ def _(FIG_DIR, PchipInterpolator, np, plt, pt1):
                  xerr=pt1['sH'], yerr=pt1['sB'],
                  fmt='o', color=C_B, mfc='white', markersize=5,
                  ecolor=C_B, elinewidth=0.9, capsize=2.5, label=r'$B$  data')
-    axB.set_xlabel(r'$H$  (A / m)')
-    axB.set_ylabel(r'$B$  (T)', color=C_B)
-    axB.tick_params(axis='y', colors=C_B)
-    axB.spines['left'].set_color(C_B)
+    axB.set_ylabel(r'$B$  (T)')
     axB.minorticks_on()
     axB.grid(True, which='major', alpha=0.25)
     axB.grid(True, which='minor', alpha=0.10)
+    axB.legend(loc='lower right', framealpha=0.92, fontsize=8)
 
     axMu.plot(Hmu_grid, interp_mu(Hmu_grid), '-', color=C_MU, alpha=0.85,
               label=r'$\mu_{\mathrm{r}}$  smooth guide')
@@ -373,16 +376,22 @@ def _(FIG_DIR, PchipInterpolator, np, plt, pt1):
                   ecolor=C_MU, elinewidth=0.9, capsize=2.5, label=r'$\mu_{\mathrm{r}}$  data')
     axMu.axvline(pt1.loc[peak_idx, 'H'], color=C_MU,
                  linestyle=':', linewidth=1.0, alpha=0.75, label=r'$\mu_{\mathrm{r}}$ peak')
-    axMu.set_ylabel(r'$\mu_{\mathrm{r}} = \mu / \mu_0$', color=C_MU)
-    axMu.tick_params(axis='y', colors=C_MU)
-    axMu.spines['right'].set_color(C_MU)
-    axMu.grid(False)
+    axMu.set_xlabel(r'$H$  (A / m)')
+    axMu.set_ylabel(r'$\mu_{\mathrm{r}} = \mu / \mu_0$')
+    axMu.minorticks_on()
+    axMu.grid(True, which='major', alpha=0.25)
+    axMu.grid(True, which='minor', alpha=0.10)
+    axMu.legend(loc='upper right', framealpha=0.92, fontsize=8)
+
+    _x_hi = float((pt1['H'] + pt1['sH']).max()) * 1.02
+    axMu.set_xlim(0.0, _x_hi)
+    axB.set_ylim(0.0, float((pt1['B'] + pt1['sB']).max()) * 1.04)
+    _mu_lo = float((pt1['mu_rel'] - pt1['s_mu_rel']).min())
+    _mu_hi = float((pt1['mu_rel'] + pt1['s_mu_rel']).max())
+    _mu_pad = 0.06 * (_mu_hi - _mu_lo)
+    axMu.set_ylim(max(0.0, _mu_lo - _mu_pad), _mu_hi + _mu_pad)
 
     axB.set_title('Peak-envelope magnetization curve and relative permeability — iron toroid')
-
-    h1, l1 = axB.get_legend_handles_labels()
-    h2, l2 = axMu.get_legend_handles_labels()
-    axB.legend(h1 + h2, l1 + l2, loc='center right', framealpha=0.92)
 
     fig.savefig(FIG_DIR / 'fig_BH_mu.pdf', bbox_inches='tight')
     fig.savefig(FIG_DIR / 'fig_BH_mu.png', bbox_inches='tight', dpi=600)
@@ -576,7 +585,7 @@ def _(FIG_DIR, RUNS, fits, np, plt):
 
     ax_res.axhline(0, color='gray', linestyle='--', linewidth=0.8)
     ax_res.set_xlabel(r"$L'$   (mm)")
-    ax_res.set_ylabel('residual  (A / T)')
+    ax_res.set_ylabel(r"$(NI/B)-f(L')$  (A / T)")
     ax_res.minorticks_on()
     ax_res.grid(True, which='minor', alpha=0.10)
 
@@ -699,12 +708,12 @@ def _(FIG_DIR, MU0_THEO, RUNS, fits, np, plt):
     _ax_mu0.axvline(0, color="0.25", linewidth=0.8)
     _ax_mu0.set_yticks(_y, _quantities)
     _ax_mu0.invert_yaxis()
-    _ax_mu0.set_xlabel(r"required coherent shift in apparatus constant (\%)")
+    _ax_mu0.set_xlabel("required coherent shift in apparatus constant (%)")
     _ax_mu0.set_title(r"Scale shifts that would move the copper-gap $\mu_0$ result")
     _ax_mu0.grid(True, axis="x", which="major", alpha=0.25)
     _ax_mu0.minorticks_on()
     _ax_mu0.grid(True, axis="x", which="minor", alpha=0.10)
-    _ax_mu0.legend(loc="lower right", fontsize=8)
+    _ax_mu0.legend(loc="upper right", fontsize=8)
 
     _fig_mu0.savefig(FIG_DIR / "fig_mu0_sensitivity.pdf", bbox_inches="tight")
     _fig_mu0.savefig(FIG_DIR / "fig_mu0_sensitivity.png", bbox_inches="tight", dpi=600)
