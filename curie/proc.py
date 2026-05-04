@@ -1301,7 +1301,7 @@ def _(Line2D, diagnostics, np, plt, save_figure, smooth, summary):
     ax_methods.set_xlabel(r"$T$ (K)")
     ax_methods.set_ylabel("normalized signal")
     ax_methods.set_ylim(-0.03, 1.03)
-    ax_methods.set_title("Normalized Curie-transition proxies")
+    ax_methods.set_title("Normalized Curie-transition signals")
     ax_methods.minorticks_on()
     ax_methods.grid(True, which="major", alpha=0.25)
     ax_methods.grid(True, which="minor", alpha=0.10)
@@ -1346,7 +1346,7 @@ def _(
         s=16, color="C2", alpha=0.80, label="background-fit quartile",
     )
     _ax_temp.axvline(_ready_time, color="C3", linestyle="--", linewidth=1.0, label="field-ready cut")
-    _ax_temp.set_xlabel(r"time (s)")
+    _ax_temp.set_xlabel(r"$t$ (s)")
     _ax_temp.set_ylabel(r"$T$ (K)")
     _ax_temp.set_title("Thermal trajectory")
     _ax_temp.grid(True, which="major", alpha=0.25)
@@ -1360,15 +1360,15 @@ def _(
         xerr=summary["sigma_T_K"].to_numpy(),
         fmt="o", color="C0", ecolor="C0", alpha=0.70,
         markersize=3.0, elinewidth=0.5, capsize=1.5,
-        label="per-loop branch $|H|_\\mathrm{max}$",
+        label=r"per-loop $|H|_\mathrm{max}$",
     )
     _ax_field.axvline(
         field_ready_temperature_K, color="C3", linestyle="--", linewidth=1.0,
         label="field-ready cut",
     )
     _ax_field.set_xlabel(r"$T$ (K)")
-    _ax_field.set_ylabel(r"$|H|_\mathrm{max}$ (A m$^{-1}$), common branch")
-    _ax_field.set_title("Drive-field plateau check")
+    _ax_field.set_ylabel(r"$|H|_\mathrm{max}$ (A m$^{-1}$)")
+    _ax_field.set_title("Drive-field plateau check: common branch")
     _ax_field.grid(True, which="major", alpha=0.25)
     _ax_field.minorticks_on()
     _ax_field.grid(True, which="minor", alpha=0.10)
