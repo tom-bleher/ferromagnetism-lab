@@ -159,6 +159,63 @@ def _():
 
 
 @app.cell
+def _(Line2D, np, plt, save_figure):
+    # Guide-style schematic: mean-field magnetization in zero and finite
+    # applied field. This is not fitted to the Monel data; it is a compact
+    # visual explanation for why scans taken at different drive amplitudes
+    # are not interchangeable statistical repeats.
+    tau = np.linspace(0.05, 2.3, 600)  # T / Tc
+    fields = [0.0, 0.01, 0.04, 0.12]
+
+    def mean_field_branch(h):
+        m_values = np.empty_like(tau)
+        m = 1.0
+        for i, t in enumerate(tau):
+            for _ in range(3000):
+                m_next = np.tanh((h + m) / t)
+                if abs(m_next - m) < 1e-11:
+                    m = float(m_next)
+                    break
+                m = 0.55 * m + 0.45 * float(m_next)
+            m_values[i] = m
+        return m_values
+
+    fig_mf, ax_mf = plt.subplots(figsize=(5.4, 3.5), constrained_layout=True)
+    colors = ["0.05", "#234cff", "#2446d8", "#1f3aaa"]
+    linewidths = [2.4, 2.0, 2.2, 2.4]
+    for h, color, linewidth in zip(fields, colors, linewidths):
+        m = mean_field_branch(h)
+        if h == 0.0:
+            ax_mf.plot(tau, m, color=color, linestyle="--", linewidth=linewidth)
+        else:
+            ax_mf.plot(tau, m, color=color, linewidth=linewidth)
+
+    ax_mf.annotate(
+        "increasing\nfield",
+        xy=(1.75, 0.83), xytext=(1.38, 0.38),
+        arrowprops={"arrowstyle": "-|>", "connectionstyle": "arc3,rad=-0.35", "lw": 1.2, "color": "0.1"},
+        ha="center", va="center", fontsize=9,
+    )
+    ax_mf.set_xlabel(r"$T/T_\mathrm{c}$")
+    ax_mf.set_ylabel(r"$M/M_\mathrm{sat}$")
+    ax_mf.set_xlim(0.0, 2.3)
+    ax_mf.set_ylim(-0.03, 1.03)
+    ax_mf.minorticks_on()
+    ax_mf.grid(True, which="major", alpha=0.20)
+    ax_mf.grid(True, which="minor", alpha=0.08)
+    ax_mf.legend(
+        handles=[
+            Line2D([0], [0], color="0.05", linestyle="--", linewidth=2.4, label=r"$H=0$"),
+            Line2D([0], [0], color="#234cff", linewidth=2.4, label=r"$H\ne0$"),
+        ],
+        loc="lower left", framealpha=0.95,
+    )
+    save_figure(fig_mf, "curie_mean_field_broadening")
+    fig_mf
+    return
+
+
+@app.cell
 def _(DATA_FILE, DATA_XLSX, mo, np, pd, read_table):
     data = pd.read_csv(DATA_FILE, sep="\t")
     apparatus = read_table(DATA_XLSX, sheet_name="apparatus").iloc[0]
