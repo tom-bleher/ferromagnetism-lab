@@ -1045,15 +1045,22 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, pd, summary):
 
     msq_intercept = float(odr_result.params[0])
     msq_slope = float(odr_result.params[1])
-    msq_sigma_intercept = float(odr_result.errors[0])
-    msq_sigma_slope = float(odr_result.errors[1])
     redchi = float(odr_result.redchi)
-    # scipy.odr reports sd_beta already scaled by out.res_var. taulab exposes
-    # unscaled cov_beta as .cov, so multiply by the same residual variance
-    # before propagating an intercept-derived Tc. Do not multiply errors by
-    # sqrt(redchi) again.
-    odr_cov_scale = float(getattr(odr_result.raw_output, "res_var", redchi))
-    msq_cov_si = float(odr_result.cov[0, 1] * odr_cov_scale) if odr_result.cov is not None else 0.0
+    # scipy.odr reports sd_beta already scaled by out.res_var, while cov_beta
+    # is unscaled. For lab-report uncertainties the input sigmas are treated as
+    # instrument/model estimates, so reduced chi^2 < 1 must not shrink them;
+    # we apply a Birge factor only when the residuals are over-dispersed.
+    raw_odr_cov_scale = float(getattr(odr_result.raw_output, "res_var", redchi))
+    odr_cov_scale = max(raw_odr_cov_scale, 1.0)
+    if odr_result.cov is not None:
+        _msq_cov = odr_result.cov * odr_cov_scale
+        msq_sigma_intercept = float(np.sqrt(max(_msq_cov[0, 0], 0.0)))
+        msq_sigma_slope = float(np.sqrt(max(_msq_cov[1, 1], 0.0)))
+        msq_cov_si = float(_msq_cov[0, 1])
+    else:
+        msq_sigma_intercept = float(odr_result.errors[0])
+        msq_sigma_slope = float(odr_result.errors[1])
+        msq_cov_si = 0.0
     rescale = float(np.sqrt(odr_cov_scale))
 
     Tc_K = -msq_intercept / msq_slope
@@ -1140,10 +1147,11 @@ def _(FIT_UPPER_MARGIN_K, K_MIN, K_best, K_scan_table, Tc_C, Tc_K, fit_mask, mo,
     \quad(\chi^2/\nu={odr_result.redchi:.2f},\;p={odr_result.p_value:.3f},\;\sigma_{{T_c}}=\pm{sigma_Tc_K:.1f}\,\mathrm{{K}}).
     $$
 
-    ODR covariance note: SciPy's `sd_beta` already includes the residual
-    variance scale (factor `{rescale:.2f}` on parameter errors here), so
-    the propagation uses that covariance directly and does not apply a
-    second Birge multiplication.
+    ODR covariance note: SciPy's `cov_beta` is unscaled while `sd_beta`
+    includes the residual-variance scale. We propagate `cov_beta` with
+    `max(res_var, 1)` (factor `{rescale:.2f}` on parameter errors here),
+    so over-dispersed residuals inflate the parameter covariance but
+    under-dispersed residuals do not shrink the instrument-based errors.
 
     **K-scan trajectory.** Each row is one ODR fit on the top-$K$
     points (closest to the half-height seed from below). Reading down the
@@ -1786,46 +1794,74 @@ def _(
                 if len(_replicas) >= 5:
                     sigma_Tc_half = float(np.std(_replicas, ddof=1))
 
-        # Iterative ODR window: keep mean-field linear regime only.
-        Tc_it = Tc_seed
-        res = None
-        for _ in range(5):
-            mask = (
-                (T_used >= Tc_it - 25.0)
-                & (T_used <= Tc_it + 2.0)
-                & (M0 > 0)
-                & (snr > 3.0)
-            )
-            if mask.sum() < 5:
-                near = np.argsort(np.abs(T_used - Tc_it))[:8]
-                mask = np.zeros_like(T_used, dtype=bool)
-                mask[near] = True
-            sT_safe = np.maximum(sT_used[mask], 1e-3 / np.sqrt(12.0))
-            sMsq_safe = np.maximum(sMsq[mask], 1e-30)
+        # Anchored K-scan, mirroring the main Method-III cross-check. The
+        # candidate pool is anchored to the half-height seed rather than being
+        # redefined by each fitted intercept, so noisy above-transition points
+        # cannot pull the window upward.
+        K_MIN = 5
+        FIT_UPPER_MARGIN_K = 2.0
+        FIT_LOWER_MARGIN_K = 35.0
+        FIT_TC_TOLERANCE_K = 25.0
+        FIT_MIN_P_VALUE = 0.05
+        pool = (
+            (T_used >= Tc_seed - FIT_LOWER_MARGIN_K)
+            & (T_used <= Tc_seed + FIT_UPPER_MARGIN_K)
+            & (M0 > 0)
+            & (snr > 3.0)
+        )
+        idx_pool = np.flatnonzero(pool)
+        if idx_pool.size < K_MIN:
+            idx_pool = np.argsort(np.abs(T_used - Tc_seed))[: max(K_MIN, 8)]
+        idx_sorted = idx_pool[np.argsort(-T_used[idx_pool])]
+
+        scan = []
+        for K in range(K_MIN, len(idx_sorted) + 1):
+            sel = idx_sorted[:K]
+            sT_safe = np.maximum(sT_used[sel], 1e-3 / np.sqrt(12.0))
+            sMsq_safe = np.maximum(sMsq[sel], 1e-30)
             try:
-                res = odr_fit(
+                res_K = odr_fit(
                     fit_functions.linear, None,
-                    T_used[mask], sT_safe, Msq[mask], sMsq_safe,
+                    T_used[sel], sT_safe, Msq[sel], sMsq_safe,
                     param_names=["intercept", "slope"],
                 )
             except Exception:
-                return None
-            m0_ = float(res.params[1])
-            if m0_ == 0.0 or not np.isfinite(m0_):
-                break
-            Tc_new = -float(res.params[0]) / m0_
-            if abs(Tc_new - Tc_it) < 0.05:
-                Tc_it = Tc_new
-                break
-            Tc_it = Tc_new
+                continue
+            m_K = float(res_K.params[1])
+            if m_K >= 0.0 or not np.isfinite(m_K):
+                continue
+            Tc_K_val = -float(res_K.params[0]) / m_K
+            if not np.isfinite(Tc_K_val) or abs(Tc_K_val - Tc_seed) > FIT_TC_TOLERANCE_K:
+                continue
+            scan.append({
+                "K": K,
+                "res": res_K,
+                "sel": sel,
+                "p_value": float(res_K.p_value),
+            })
 
-        if res is None:
+        if not scan:
             return None
+        acceptable = [r for r in scan if r["p_value"] >= FIT_MIN_P_VALUE]
+        if acceptable:
+            best = max(acceptable, key=lambda r: (r["K"], r["p_value"]))
+        else:
+            best = max(scan, key=lambda r: (r["p_value"], r["K"]))
+        res = best["res"]
+        mask = np.zeros_like(T_used, dtype=bool)
+        mask[best["sel"]] = True
 
         b0, m0 = float(res.params[0]), float(res.params[1])
-        sb0, sm0 = float(res.errors[0]), float(res.errors[1])
-        cov_scale = float(getattr(res.raw_output, "res_var", res.redchi))
-        cov_si = float(res.cov[0, 1] * cov_scale) if res.cov is not None else 0.0
+        raw_cov_scale = float(getattr(res.raw_output, "res_var", res.redchi))
+        cov_scale = max(raw_cov_scale, 1.0)
+        if res.cov is not None:
+            cov = res.cov * cov_scale
+            sb0 = float(np.sqrt(max(cov[0, 0], 0.0)))
+            sm0 = float(np.sqrt(max(cov[1, 1], 0.0)))
+            cov_si = float(cov[0, 1])
+        else:
+            sb0, sm0 = float(res.errors[0]), float(res.errors[1])
+            cov_si = 0.0
 
         Tc = -b0 / m0
         var_Tc = (
@@ -1969,12 +2005,19 @@ def _(
             )
             b_CW = float(cw_result.params[0])
             m_CW = float(cw_result.params[1])
-            sb_CW = float(cw_result.errors[0])
-            sm_CW = float(cw_result.errors[1])
             redchi_CW = float(cw_result.redchi)
-            cov_scale_CW = float(getattr(cw_result.raw_output, "res_var", redchi_CW))
+            raw_cov_scale_CW = float(getattr(cw_result.raw_output, "res_var", redchi_CW))
+            cov_scale_CW = max(raw_cov_scale_CW, 1.0)
             rescale_CW = float(np.sqrt(cov_scale_CW))
-            cov_CW = float(cw_result.cov[0, 1] * cov_scale_CW) if cw_result.cov is not None else 0.0
+            if cw_result.cov is not None:
+                _cov_CW = cw_result.cov * cov_scale_CW
+                sb_CW = float(np.sqrt(max(_cov_CW[0, 0], 0.0)))
+                sm_CW = float(np.sqrt(max(_cov_CW[1, 1], 0.0)))
+                cov_CW = float(_cov_CW[0, 1])
+            else:
+                sb_CW = float(cw_result.errors[0])
+                sm_CW = float(cw_result.errors[1])
+                cov_CW = 0.0
             if m_CW != 0.0 and np.isfinite(m_CW):
                 Tc_CW = -b_CW / m_CW
                 _var = (
