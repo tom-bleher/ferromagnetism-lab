@@ -357,27 +357,27 @@ def _(FIG_DIR, PchipInterpolator, np, plt, pt1):
 
     C_B, C_MU = 'C0', 'C3'
 
-    axB.plot(H_grid, interp_B(H_grid), '-', color=C_B, alpha=0.85, label=r'$B$  smooth guide')
+    axB.plot(H_grid, interp_B(H_grid), '-', color=C_B, alpha=0.85, label=r'$B$ smooth guide')
     axB.errorbar(pt1['H'], pt1['B'],
                  xerr=pt1['sH'], yerr=pt1['sB'],
                  fmt='o', color=C_B, mfc='white', markersize=5,
-                 ecolor=C_B, elinewidth=0.9, capsize=2.5, label=r'$B$  data')
-    axB.set_ylabel(r'$B$  (T)')
+                 ecolor=C_B, elinewidth=0.9, capsize=2.5, label=r'$B$ data')
+    axB.set_ylabel(r'$B$ (T)')
     axB.minorticks_on()
     axB.grid(True, which='major', alpha=0.25)
     axB.grid(True, which='minor', alpha=0.10)
     axB.legend(loc='lower right', framealpha=0.92, fontsize=8)
 
     axMu.plot(Hmu_grid, interp_mu(Hmu_grid), '-', color=C_MU, alpha=0.85,
-              label=r'$\mu_{\mathrm{r}}$  smooth guide')
+              label=r'$\mu_{\mathrm{r}}$ smooth guide')
     axMu.errorbar(pt1['H'], pt1['mu_rel'],
                   xerr=pt1['sH'], yerr=pt1['s_mu_rel'],
                   fmt='s', color=C_MU, mfc='white', markersize=5,
-                  ecolor=C_MU, elinewidth=0.9, capsize=2.5, label=r'$\mu_{\mathrm{r}}$  data')
+                  ecolor=C_MU, elinewidth=0.9, capsize=2.5, label=r'$\mu_{\mathrm{r}}$ data')
     axMu.axvline(pt1.loc[peak_idx, 'H'], color=C_MU,
                  linestyle=':', linewidth=1.0, alpha=0.75, label=r'$\mu_{\mathrm{r}}$ peak')
-    axMu.set_xlabel(r'$H$  (A / m)')
-    axMu.set_ylabel(r'$\mu_{\mathrm{r}} = \mu / \mu_0$')
+    axMu.set_xlabel(r'$H$ (A m$^{-1}$)')
+    axMu.set_ylabel(r'$\mu_{\mathrm{r}}=\mu/\mu_0$')
     axMu.minorticks_on()
     axMu.grid(True, which='major', alpha=0.25)
     axMu.grid(True, which='minor', alpha=0.10)
@@ -391,7 +391,7 @@ def _(FIG_DIR, PchipInterpolator, np, plt, pt1):
     _mu_pad = 0.06 * (_mu_hi - _mu_lo)
     axMu.set_ylim(max(0.0, _mu_lo - _mu_pad), _mu_hi + _mu_pad)
 
-    axB.set_title('Peak-envelope magnetization curve and relative permeability — iron toroid')
+    axB.set_title('Peak-envelope magnetization curve and relative permeability: iron toroid')
 
     fig.savefig(FIG_DIR / 'fig_BH_mu.pdf', bbox_inches='tight')
     fig.savefig(FIG_DIR / 'fig_BH_mu.png', bbox_inches='tight', dpi=600)
@@ -548,6 +548,8 @@ def _(FIG_DIR, RUNS, fits, np, plt):
         2, 1, figsize=(8.4, 6.2), sharex=True, constrained_layout=True,
         gridspec_kw={'height_ratios': [2.4, 1.0]},
     )
+    _x_edges = []
+    _res_edges = []
 
     def _draw(sheet, f):
         style         = RUNS[sheet]
@@ -556,20 +558,24 @@ def _(FIG_DIR, RUNS, fits, np, plt):
         slope_NIB     = f['slope'].value
         intercept_NIB = f['intercept'].value
         yhat_NIB      = slope_NIB * f['x'] + intercept_NIB
+        residual_NIB  = f['y_fit'] - yhat_NIB
+        _x_edges.append(Lp_mm - sx_mm)
+        _x_edges.append(Lp_mm + sx_mm)
+        _res_edges.append(np.abs(residual_NIB) + f['sy_fit'])
 
         ax_fit.errorbar(
             Lp_mm, f['y_fit'], xerr=sx_mm, yerr=f['sy_fit'],
             fmt=style['marker'], color=style['color'], mfc='white', markersize=5,
             ecolor=style['color'], elinewidth=0.9, capsize=2.5,
-            label=rf"{style['label']}  ($\langle B\rangle\approx{f['B_mean']:.2f}$ T,"
-                  rf"  $\chi^2/\nu={r.redchi:.2f}$,  p-prob. ${r.p_value:.2f}$)",
+            label=rf"{style['label']} ($\langle B\rangle\approx{f['B_mean']:.2f}$ T,"
+                  rf" $\chi^2/\nu={r.redchi:.2f}$, p-prob. ${r.p_value:.2f}$)",
         )
         xs_m = np.linspace(0, f['x'].max() * 1.05, 60)
         ax_fit.plot(xs_m * 1e3, slope_NIB * xs_m + intercept_NIB,
                     '-', color=style['color'], alpha=0.85)
 
         ax_res.errorbar(
-            Lp_mm, f['y_fit'] - yhat_NIB, xerr=sx_mm, yerr=f['sy_fit'],
+            Lp_mm, residual_NIB, xerr=sx_mm, yerr=f['sy_fit'],
             fmt=style['marker'], color=style['color'], mfc='white', markersize=5,
             ecolor=style['color'], elinewidth=0.9, capsize=2.5,
         )
@@ -577,16 +583,29 @@ def _(FIG_DIR, RUNS, fits, np, plt):
     for _sheet, _f in fits.items():
         _draw(_sheet, _f)
 
-    ax_fit.set_ylabel(r'$N I / B$   (A / T)')
-    ax_fit.set_title(r"Vacuum permeability: $N I / B$ vs width of copper plates")
+    ax_fit.set_ylabel(r'$NI/B$ (A T$^{-1}$)')
+    ax_fit.set_title(r"Vacuum permeability: $NI/B$ vs width of copper plates")
     ax_fit.legend(loc='upper left')
     ax_fit.minorticks_on()
+    ax_fit.grid(True, which='major', alpha=0.25)
     ax_fit.grid(True, which='minor', alpha=0.10)
 
+    if _x_edges:
+        _x_all = np.concatenate(_x_edges)
+        _x_lo = float(np.nanmin(_x_all))
+        _x_hi = float(np.nanmax(_x_all))
+        _x_pad = max(0.01, 0.04 * (_x_hi - _x_lo))
+        ax_fit.set_xlim(_x_lo - _x_pad, _x_hi + _x_pad)
+
     ax_res.axhline(0, color='gray', linestyle='--', linewidth=0.8)
-    ax_res.set_xlabel(r"$L'$   (mm)")
-    ax_res.set_ylabel(r"$(NI/B)-f(L')$  (A / T)")
+    if _res_edges:
+        _res_lim = float(np.nanmax(np.concatenate(_res_edges)))
+        if np.isfinite(_res_lim) and _res_lim > 0:
+            ax_res.set_ylim(-1.12 * _res_lim, 1.12 * _res_lim)
+    ax_res.set_xlabel(r"$L'$ (mm)")
+    ax_res.set_ylabel(r"$(NI/B)-f(L')$ (A T$^{-1}$)")
     ax_res.minorticks_on()
+    ax_res.grid(True, which='major', alpha=0.25)
     ax_res.grid(True, which='minor', alpha=0.10)
 
     fig2.savefig(FIG_DIR / 'fig_copper_gap.pdf', bbox_inches='tight')
@@ -708,7 +727,7 @@ def _(FIG_DIR, MU0_THEO, RUNS, fits, np, plt):
     _ax_mu0.axvline(0, color="0.25", linewidth=0.8)
     _ax_mu0.set_yticks(_y, _quantities)
     _ax_mu0.invert_yaxis()
-    _ax_mu0.set_xlabel("required coherent shift in apparatus constant (%)")
+    _ax_mu0.set_xlabel("required coherent apparatus shift (%)")
     _ax_mu0.set_title(r"Scale shifts that would move the copper-gap $\mu_0$ result")
     _ax_mu0.grid(True, axis="x", which="major", alpha=0.25)
     _ax_mu0.minorticks_on()

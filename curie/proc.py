@@ -1080,8 +1080,8 @@ def _(
 ):
     fig_msq, (ax_msq, ax_msq_res) = plt.subplots(
         2, 1,
-        figsize=(7.4, 5.6),
-        sharex=True,
+        figsize=(7.4, 5.9),
+        sharex=False,
         constrained_layout=True,
         gridspec_kw={"height_ratios": [3.0, 1.0]},
     )
@@ -1153,6 +1153,11 @@ def _(
     if not np.isfinite(_res_ylim) or _res_ylim <= 0:
         _res_ylim = 1.0
     ax_msq_res.set_ylim(-1.15 * _res_ylim, 1.15 * _res_ylim)
+    if _T_in.size:
+        _res_x_lo = float(np.nanmin(T_all[fit_mask] - sT_all[fit_mask]))
+        _res_x_hi = float(np.nanmax(T_all[fit_mask] + sT_all[fit_mask]))
+        _res_x_pad = max(0.25, 0.04 * (_res_x_hi - _res_x_lo))
+        ax_msq_res.set_xlim(_res_x_lo - _res_x_pad, _res_x_hi + _res_x_pad)
 
     ax_msq.axhline(0, color="0.4", linewidth=0.6, linestyle="--")
     ax_msq.axvline(Tc_K, color="C3", linewidth=0.8, linestyle=":")
@@ -1170,15 +1175,16 @@ def _(
 
     ax_msq.set_xlim(_x_lo, _x_hi)
     ax_msq.set_ylim(_y_lo, _y_hi)
-    ax_msq.set_ylabel(r"$M_0^2$ (kA$^2\,$m$^{-2}$)")
+    ax_msq.set_xlabel(r"$T$ (K)")
+    ax_msq.set_ylabel(r"$M_0^2$ [$(\mathrm{kA}\,\mathrm{m}^{-1})^2$]")
     ax_msq.set_title(r"Mean-field $M_0^2(T)$ fit (Method III cross-check)")
     ax_msq.minorticks_on()
     ax_msq.grid(True, which="major", alpha=0.25)
     ax_msq.grid(True, which="minor", alpha=0.10)
     ax_msq.legend(loc="upper right", fontsize=8, framealpha=0.95)
 
-    ax_msq_res.set_xlabel(r"$T$ (K)")
-    ax_msq_res.set_ylabel(r"$M_0^2 - f(T)$" + "\n" + r"(kA$^2\,$m$^{-2}$)")
+    ax_msq_res.set_xlabel(r"$T$ (K), fit window")
+    ax_msq_res.set_ylabel(r"$M_0^2 - f(T)$ [$(\mathrm{kA}\,\mathrm{m}^{-1})^2$]")
     ax_msq_res.minorticks_on()
     ax_msq_res.grid(True, which="major", alpha=0.25)
     ax_msq_res.grid(True, which="minor", alpha=0.10)
@@ -1252,9 +1258,9 @@ def _(Line2D, diagnostics, np, plt, save_figure, smooth, summary):
     temperature = summary["temperature_K"].to_numpy()
     sigma_T_arr = summary["sigma_T_K"].to_numpy()
     series = [
-        ("M_r_norm",    "sigma_M_r_norm",    r"$M_r$  ($H{=}0$)",                   "C0", "o"),
-        ("M_sat_norm",  "sigma_M_sat_norm",  r"$M_\mathrm{sat}$  ($H{=}\pm H_\mathrm{sat}$)",  "C3", "s"),
-        ("M_0_norm",    "sigma_M_0_norm",    r"$M_0$  (sat. extrap.$\to H{=}0$)",   "C2", "^"),
+        ("M_r_norm",    "sigma_M_r_norm",    r"$M_r$ ($H=0$)",                         "C0", "o"),
+        ("M_sat_norm",  "sigma_M_sat_norm",  r"$M_\mathrm{sat}$ ($H=\pm H_\mathrm{sat}$)",  "C3", "s"),
+        ("M_0_norm",    "sigma_M_0_norm",    r"$M_0$ (sat. extrap. to $H=0$)",       "C2", "^"),
     ]
 
     legend_handles = []
@@ -1361,7 +1367,7 @@ def _(
         label="field-ready cut",
     )
     _ax_field.set_xlabel(r"$T$ (K)")
-    _ax_field.set_ylabel(r"common $|H|_\mathrm{max}$ (A m$^{-1}$)")
+    _ax_field.set_ylabel(r"$|H|_\mathrm{max}$ (A m$^{-1}$), common branch")
     _ax_field.set_title("Drive-field plateau check")
     _ax_field.grid(True, which="major", alpha=0.25)
     _ax_field.minorticks_on()
@@ -1811,8 +1817,8 @@ def _(
     # Shade the excluded region so the fit window edge is unambiguous.
     fig_cw, (ax_cw, ax_cw_res) = plt.subplots(
         2, 1,
-        figsize=(7.4, 5.6),
-        sharex=True,
+        figsize=(7.4, 5.9),
+        sharex=False,
         constrained_layout=True,
         gridspec_kw={"height_ratios": [3.0, 1.0]},
     )
@@ -1888,6 +1894,10 @@ def _(
             if not np.isfinite(_res_ylim) or _res_ylim <= 0:
                 _res_ylim = 1.0
             ax_cw_res.set_ylim(-1.15 * _res_ylim, 1.15 * _res_ylim)
+            _res_x_lo = float(np.nanmin(_T_all[_used] - _sigma_T_all[_used]))
+            _res_x_hi = float(np.nanmax(_T_all[_used] + _sigma_T_all[_used]))
+            _res_x_pad = max(0.25, 0.04 * (_res_x_hi - _res_x_lo))
+            ax_cw_res.set_xlim(_res_x_lo - _res_x_pad, _res_x_hi + _res_x_pad)
 
             _zoom_x_lo = max(_x_lo, Tc_CW - 0.5)
             _zoom_x_hi = min(_x_hi, _edge + 8.0)
@@ -1930,6 +1940,7 @@ def _(
     ax_cw_res.axhline(0, color="0.35", linewidth=0.8, linestyle="--")
     ax_cw.set_xlim(_x_lo, _x_hi)
     ax_cw.set_ylim(_y_lo, _y_hi)
+    ax_cw.set_xlabel(r"$T$ (K)")
     ax_cw.set_ylabel(r"$1/\chi$ (arb. units)")
     ax_cw.set_title(r"Apparent Curie–Weiss $1/\chi(T)$ above $T_c$ (Method IV check)")
     ax_cw.minorticks_on()
@@ -1937,7 +1948,7 @@ def _(
     ax_cw.grid(True, which="minor", alpha=0.10)
     ax_cw.legend(loc="upper left", fontsize=8, framealpha=0.95)
 
-    ax_cw_res.set_xlabel(r"$T$ (K)")
+    ax_cw_res.set_xlabel(r"$T$ (K), fit window")
     ax_cw_res.set_ylabel(r"$(1/\chi - f(T))/\sigma$")
     ax_cw_res.minorticks_on()
     ax_cw_res.grid(True, which="major", alpha=0.25)
