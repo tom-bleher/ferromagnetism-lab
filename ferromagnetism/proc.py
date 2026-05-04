@@ -48,7 +48,7 @@ def _(mo):
     mo.md(r"""
     ## Course-style data processing conventions
 
-    Instrument uncertainties use the manufacturer/manual value or the display
+    Instrument uncertainties use the manufacturer specification or the display
     resolution uncertainty. Independent uncertainty contributions are combined
     in quadrature, and indirect quantities are propagated by the usual partial
     derivative rule.
@@ -170,11 +170,11 @@ def _(mo):
     | $N$ (turns) | $250$ | — | count given |
     | $L$ (Ampère loop) | $0.48\,\mathrm{m}$ | $\frac{2\sqrt{2}\,\mathrm{mm}}{\sqrt{12}} \approx 0.82\,\mathrm{mm}$ $(0.17\%)$ | two ruler measurements for sides $a,b$ (res $1\,\mathrm{mm}$) and indirect $L = 2(a+b)$: $\sigma_L = 2\sqrt{\sigma_a^2 + \sigma_b^2}$ |
     | $L'$ | per measurement | $\frac{0.05\,\mathrm{mm}}{\sqrt{12}} \approx 14.4\,\mu\mathrm{m}$ | caliper (res $0.05\,\mathrm{mm}$) |
-    | $R_x$ (current-sense) | $2.999\,\mathrm{\Omega}$ | $4.3\,\mathrm{m\Omega}$ $(0.14\%)$ | HP 34401A manual, p. 216: 1-year resistance accuracy on 100 Ω range, $\pm(0.010\%$ reading $+0.004\%$ range$)$ used directly as the instrument uncertainty, then combined in quadrature with display resolution$/\sqrt{12}$ |
+    | $R_x$ (current-sense) | $2.999\,\mathrm{\Omega}$ | $4.3\,\mathrm{m\Omega}$ $(0.14\%)$ | From the instrument specification for the measurement range, we assign a manufacturer uncertainty of $\pm(0.010\%$ reading $+0.004\%$ range$)$; it is combined in quadrature with display resolution$/\sqrt{12}$ |
     | $R_y$ (integrator) | $11.10\,\mathrm{k\Omega}$ | $0$ | Treated as an exact calibration constant by analysis convention; if measured as an uncertain quantity, it should use the same manufacturer-bound and resolution quadrature rule |
     | $C$ (integrator) | $20.1\,\mu\mathrm{F}$ | $2.0\,\mathrm{nF}$ $(0.01\%)$ | value and uncertainty given |
     | $A$ (core cross-section) | $16.0\,\mathrm{cm^{2}}$ | $A\,\sqrt{2}\,\dfrac{1\,\mathrm{mm}/\sqrt{12}}{40\,\mathrm{mm}} \approx 0.16\,\mathrm{cm^{2}}$ $(1.02\%)$ | two ruler measurements for sides $a,b\approx 4\,\mathrm{cm}$ (res $1\,\mathrm{mm}$) and indirect $A=a\cdot b$: $\sigma_A/A = \sqrt{(\sigma_a/a)^2 + (\sigma_b/b)^2}$ |
-    | $\Delta V_x,\,\Delta V_y$ (scope, dual-cursor) | per measurement | $\sqrt{\left(0.024\,\lvert V\rvert\right)^2 + (0.5\,\mathrm{mV}/\sqrt{12})^2}$ | Agilent 7000A data sheet, p. 18: dual-cursor accuracy $=\pm(2.0\%$ vertical gain $+0.4\%$ full scale$)$, used directly as the instrument uncertainty; full scale approximated by the measured cursor span. The scope voltage resolution is $0.5\,\mathrm{mV}$, therefore $\sigma_{\mathrm{res}}=0.5\,\mathrm{mV}/\sqrt{12}$; total $\sigma_{\Delta V}$ is manufacturer uncertainty and resolution uncertainty combined in quadrature. |
+    | $\Delta V_x,\,\Delta V_y$ (scope, dual-cursor) | per measurement | $\sqrt{\left(0.024\,\lvert V\rvert\right)^2 + (0.5\,\mathrm{mV}/\sqrt{12})^2}$ | From the oscilloscope specification, we assign a manufacturer uncertainty of $\pm(2.0\%$ vertical gain $+0.4\%$ full scale$)$, approximated as $0.024|V|$ for our cursor spans. The voltage resolution is $0.5\,\mathrm{mV}$, so $\sigma_{\mathrm{res}}=0.5\,\mathrm{mV}/\sqrt{12}$; the two contributions are combined in quadrature. |
     """
     mo.vstack([mo.md("## Uncertainties"), mo.center(mo.md(_budget_md))])
     return

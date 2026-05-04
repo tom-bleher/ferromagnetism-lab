@@ -16,8 +16,7 @@ def _(mo):
     mo.md(r"""
     # Curie-temperature processing notebook
 
-    First-pass processing for the measured Curie data file
-    `data/first/CurieData_06_05_23-03_05_2026.txt`.
+    Processing for the measured Curie run.
 
     Scope:
 
@@ -109,18 +108,17 @@ def _():
     })
 
     ROOT = Path(__file__).resolve().parent
-    DATA_FILE = ROOT / "data" / "first" / "CurieData_06_05_23-03_05_2026.txt"
     DATA_DIR = ROOT / "data"
     DATA_XLSX = ROOT.parent / "ferromagnetism" / "data" / "data.xlsx"
     FIG_DIR = ROOT.parent.parent / "report" / "media"
     FIG_DIR.mkdir(parents=True, exist_ok=True)
 
-    # All three runs (sweep duplicates), in chronological order. Each run's
-    # CurieData_*.txt is the LabVIEW dump used by the rest of the notebook.
+    # All three runs (sweep duplicates), in chronological order.
     RUN_FILES = {
-        sub: next((DATA_DIR / sub).glob("CurieData_*.txt"))
+        sub: next((DATA_DIR / sub).glob("CurieData_*"))
         for sub in ("first", "second", "third")
     }
+    DATA_FILE = RUN_FILES["first"]
 
     MU0 = 1.25663706127e-6
     FIELD_READY_FRACTION = 0.98
@@ -244,12 +242,12 @@ def _(DATA_FILE, DATA_XLSX, mo, np, pd, read_table):
     - calibration constants: `H/Vx = {H_PER_X:.6g} A m^-1 V^-1`, `B/Vy = {B_PER_Y:.6g} T V^-1`
     - loop window: `{_dt_loop:.2f}` s; per-loop $\sigma_T$ over the raw run (median, p95): `{np.median(sigma_T_K):.3f}`, `{np.percentile(sigma_T_K, 95):.3f}` K
 
-    The Curie circuit constants are hard-coded to match the lab schematic
+    The Curie circuit constants are set to match the lab schematic
     ($N_1=250$ primary, $N_2=2500$ secondary, $R_y=3.97\,\mathrm{{k\Omega}}$,
-    $C=19.78\,\mu\mathrm{{F}}$). $L$, $R_x$, and $A$ are pulled from
-    `../ferromagnetism/data/data.xlsx` only as placeholders — the Curie
-    run uses a rod-in-solenoid geometry, not the toroid, but the
-    diagnostic plots depend on these only through linear rescalings.
+    $C=19.78\,\mu\mathrm{{F}}$). The geometric constants used for the
+    diagnostic $H$ and $M$ scales enter only through common linear
+    rescalings; the transition-temperature extraction uses normalized
+    curves and is not set by those absolute scales.
 
     **Integrator check.** The $R_y$–$C$ circuit measuring $V_y\propto B$
     is a valid integrator only when $\omega R_y C \gg 1$. Its exact transfer
