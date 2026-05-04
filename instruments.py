@@ -78,14 +78,14 @@ def digital_multimeter_resistance(R: float, *, include_lsd: bool = True) -> floa
 
 
 def oscilloscope_dual_cursor(V, *, gain_frac: float = 0.024,
-                             floor: float = 5e-3, lsd: float | None = None):
+                             floor: float = 5e-3, resolution: float | None = None):
     """Keysight DSO7012A dual-cursor ΔV standard uncertainty.
 
     The datasheet's ``±(gain·|V| + floor)`` cursor accuracy is treated as
-    a Type-B rectangular bound and combined with display quantisation.
+    a Type-B rectangular bound and combined with display resolution.
     """
     V_arr = np.asarray(V, dtype=float)
     base = _rectangular_bound_sigma(gain_frac * np.abs(V_arr) + float(floor))
-    if lsd is not None and lsd > 0 and np.isfinite(lsd):
-        base = np.sqrt(base ** 2 + (lsd / np.sqrt(12)) ** 2)
+    if resolution is not None and resolution > 0 and np.isfinite(resolution):
+        base = np.sqrt(base ** 2 + (resolution / np.sqrt(12)) ** 2)
     return base if V_arr.ndim else float(base)

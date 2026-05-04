@@ -68,10 +68,8 @@ def _():
 
     from instruments import (
         caliper,
-        column_lsd,
         digital_multimeter_resistance,
         oscilloscope_dual_cursor,
-        reading_lsd,
         ruler,
     )
 
@@ -113,7 +111,10 @@ def _():
         """LaTeX $v \\pm \\sigma\\,\\mathrm{unit}$ for ufloat / PhysicalSize."""
         if hasattr(x, 'value'):
             x = ufloat(x.value, x.uncertainty)
-        core = format(x, '.2uL')
+        if getattr(x, 's', None) == 0:
+            core = f'{x.n:.6g}'
+        else:
+            core = format(x, '.2uL')
         umod = r'\,\mathrm{' + unit + '}' if unit else ''
         return f'${core}{umod}$'
 
@@ -125,7 +126,6 @@ def _():
         PhysicalSize,
         PchipInterpolator,
         caliper,
-        column_lsd,
         combine,
         digital_multimeter_resistance,
         fit_functions,
@@ -137,7 +137,6 @@ def _():
         pd,
         plt,
         read_table,
-        reading_lsd,
         ruler,
         ufloat,
         unp,
@@ -153,10 +152,10 @@ def _(mo):
     | $L$ (Ampère loop) | $0.48\,\mathrm{m}$ | $\frac{2\sqrt{2}\,\mathrm{mm}}{\sqrt{12}} \approx 0.82\,\mathrm{mm}$ $(0.17\%)$ | two ruler measurements for sides $a,b$ (res $1\,\mathrm{mm}$) and indirect $L = 2(a+b)$: $\sigma_L = 2\sqrt{\sigma_a^2 + \sigma_b^2}$ |
     | $L'$ | per measurement | $\frac{0.05\,\mathrm{mm}}{\sqrt{12}} \approx 14.4\,\mu\mathrm{m}$ | caliper (res $0.05\,\mathrm{mm}$) |
     | $R_x$ (current-sense) | $2.999\,\mathrm{\Omega}$ | $2.5\,\mathrm{m\Omega}$ $(0.083\%)$ | HP 34401A manual, p. 216: 1-year resistance accuracy on 100 Ω range, $\pm(0.010\%$ reading $+0.004\%$ range$)$ treated as a Type-B rectangular bound, plus $\mathrm{LSD}/\sqrt{12}$ |
-    | $R_y$ (integrator) | $11.10\,\mathrm{k\Omega}$ | $1.2\,\mathrm{\Omega}$ $(0.011\%)$ | HP 34401A manual, p. 216: 1-year resistance accuracy on 100 kΩ range, $\pm(0.010\%$ reading $+0.001\%$ range$)$ treated as a Type-B rectangular bound |
+    | $R_y$ (integrator) | $11.10\,\mathrm{k\Omega}$ | $0$ | Treated as an exact calibration constant in this analysis |
     | $C$ (integrator) | $20.1\,\mu\mathrm{F}$ | $2.0\,\mathrm{nF}$ $(0.01\%)$ | value and uncertainty given |
     | $A$ (core cross-section) | $16.0\,\mathrm{cm^{2}}$ | $A\,\sqrt{2}\,\dfrac{1\,\mathrm{mm}/\sqrt{12}}{40\,\mathrm{mm}} \approx 0.16\,\mathrm{cm^{2}}$ $(1.02\%)$ | two ruler measurements for sides $a,b\approx 4\,\mathrm{cm}$ (res $1\,\mathrm{mm}$) and indirect $A=a\cdot b$: $\sigma_A/A = \sqrt{(\sigma_a/a)^2 + (\sigma_b/b)^2}$ |
-    | $\Delta V_x,\,\Delta V_y$ (scope, dual-cursor) | per measurement | $\sqrt{\left[(0.024\,\lvert V\rvert+5\,\mathrm{mV})/\sqrt{3}\right]^2 + (\mathrm{LSD}/\sqrt{12})^2}$ | Agilent 7000A data sheet, p. 18: dual-cursor accuracy $=\pm(2.0\%$ vertical gain $+0.4\%$ full scale $+5\,\mathrm{mV})$, treated as a Type-B rectangular bound; full scale approximated by the measured cursor span |
+    | $\Delta V_x,\,\Delta V_y$ (scope, dual-cursor) | per measurement | $\sqrt{\left[(0.024\,\lvert V\rvert+5\,\mathrm{mV})/\sqrt{3}\right]^2 + (0.5\,\mathrm{mV}/\sqrt{12})^2}$ | Agilent 7000A data sheet, p. 18: dual-cursor accuracy $=\pm(2.0\%$ vertical gain $+0.4\%$ full scale $+5\,\mathrm{mV})$, treated as a Type-B rectangular bound; full scale approximated by the measured cursor span. The scope voltage resolution is $0.5\,\mathrm{mV}$, therefore $\sigma_{\mathrm{res}}=0.5\,\mathrm{mV}/\sqrt{12}$; total $\sigma_{\Delta V}$ is manufacturer uncertainty and resolution uncertainty combined in quadrature. |
     """
     mo.vstack([mo.md("## Uncertainties"), mo.center(mo.md(_budget_md))])
     return
@@ -167,7 +166,6 @@ def _(
     DATA_XLSX,
     MU0_THEO,
     caliper,
-    column_lsd,
     combine,
     digital_multimeter_resistance,
     fmt,
@@ -175,10 +173,11 @@ def _(
     np,
     oscilloscope_dual_cursor,
     read_table,
-    reading_lsd,
     ruler,
     ufloat,
 ):
+    import warnings
+
     _p = read_table(DATA_XLSX, sheet_name='apparatus').iloc[0]
     N      = int(_p['N'])
     L_nom  = float(_p['L (m)'])
@@ -191,25 +190,28 @@ def _(
     u_L  = 2.0 * combine(ruler(), ruler())
     u_Lp = caliper()
 
-    # Ry should be measured to get LSD
     u_Rx = digital_multimeter_resistance(Rx_nom)
-    u_Ry = digital_multimeter_resistance(Ry_nom, include_lsd=False)
+    # By analysis convention, R_y is treated as an exact calibration constant.
+    u_Ry = 0.0
     u_C  = 0.0001 * C_nom
 
     # A = a·b with a = b = 4 cm on a 1-mm ruler ⇒ σ_A/A ≈ 1.0 %.
     _u_side_rel = ruler() / 0.04
     u_A         = A_nom * combine(_u_side_rel, _u_side_rel)
 
-    def u_V(V, lsd=None):
-        """Scope ΔV σ — oscilloscope dual-cursor spec ⊕ LSD/√12."""
+    def u_V(V, resolution=0.5e-3):
+        """Scope ΔV σ: resolution is 0.5 mV, so σ_res = resolution/√12."""
         V = np.asarray(V, dtype=float)
-        if lsd is None:
-            lsd = column_lsd(V) if V.ndim > 0 else reading_lsd(V.item())
-        return oscilloscope_dual_cursor(V, lsd=lsd)
+        return oscilloscope_dual_cursor(V, resolution=resolution)
 
     L  = ufloat(L_nom,  u_L,  'L')
     Rx = ufloat(Rx_nom, u_Rx, 'Rx')
-    Ry = ufloat(Ry_nom, u_Ry, 'Ry')
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            'ignore',
+            message='Using UFloat objects with std_dev==0 may give unexpected results.',
+        )
+        Ry = ufloat(Ry_nom, u_Ry, 'Ry')
     C  = ufloat(C_nom,  u_C,  'C')
     A  = ufloat(A_nom,  u_A,  'A')
 
@@ -613,11 +615,11 @@ def _(MU0_THEO, RUNS, fits, mo, np):
     - $A$: budgeted at 1.0 %. To explain a 30–35 % bias on its own,
       the cross-section would need to be 23 cm² instead of 16 cm² —
       far outside the budget.
-    - $R_x$, $R_y$, $C$: budgeted below 0.2 %. Off-by-30 % is
-      not credible for any of them in isolation. (The film capacitor
-      $C$ is the loosest of the three by typical-tolerance arguments,
-      but its measured value is closer to its nominal than the bias
-      requires.)
+    - $R_x$ and $C$: budgeted below 0.2 %. $R_y$ is treated as exact by
+      analysis convention. Off-by-30 % is not credible for any of these
+      in isolation. (The film capacitor $C$ is the loosest by typical-
+      tolerance arguments, but its measured value is closer to its nominal
+      than the bias requires.)
     - $L'$: budgeted at $\sim$15 µm absolute, which is 3–14 % relative
       depending on the plate count. Two effects compound: (i) the
       caliper LSD itself is appreciable on a 0.10 mm plate, and (ii)
@@ -630,7 +632,7 @@ def _(MU0_THEO, RUNS, fits, mo, np):
     Conclusion: the dominant systematic is most plausibly the effective
     copper-plate gap $L'$ (geometric thickness vs effective magnetic
     gap including mounting/contact effects), with the core cross-section
-    $A$ as a secondary candidate. $R_x$, $R_y$, $C$, and $N$ are
+    $A$ as a secondary candidate. $R_x$, $R_y$, $C$, and $N$ remain
     individually too tightly constrained to be primary suspects.
     """)
     return
