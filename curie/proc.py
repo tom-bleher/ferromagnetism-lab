@@ -62,8 +62,8 @@ def _(mo):
 
     The half-height crossings are local derived quantities, not fitted physical
     models. The two cross-check models in this notebook are the weighted line
-    fits of $M_0^2(T)$ and apparent Curie-Weiss $1/\chi(T)$; both report fit
-    parameters, relative errors, $\chi^2/\nu$, p-probability, DOF, and
+    fits of $M_0^2(T)$ and apparent Curie–Weiss $1/\chi(T)$; both report fit
+    parameters, relative errors, $\chi^2/\nu$, p-value, DOF, and
     data-minus-fit panels.
     """)
     return
@@ -653,9 +653,9 @@ def _(
     _T_used = summary["temperature_K"].to_numpy()
     _sT_used = summary["sigma_T_K"].to_numpy()
     diagnostics = pd.DataFrame([
-        {"method": r"I: $M_r$ (H=0)", **transition_diagnostics(_T_used, summary["M_r_norm"].to_numpy())},
-        {"method": rf"II: $M_\mathrm{{sat}}$ (H=±{H_SAT:.2f} A/m)", **transition_diagnostics(_T_used, summary["M_sat_norm"].to_numpy())},
-        {"method": r"III: $M_0$ (sat. extrap.→H=0)", **transition_diagnostics(_T_used, summary["M_0_norm"].to_numpy())},
+        {"method": r"$M_\mathrm{r}$ (H=0)", **transition_diagnostics(_T_used, summary["M_r_norm"].to_numpy())},
+        {"method": rf"$M_\mathrm{{sat}}$ (H=±{H_SAT:.2f} A/m)", **transition_diagnostics(_T_used, summary["M_sat_norm"].to_numpy())},
+        {"method": r"$M_0$ (sat. extrap.→H=0)", **transition_diagnostics(_T_used, summary["M_0_norm"].to_numpy())},
     ])
 
     # Local half-height T_c uncertainty for each method. Folds the
@@ -680,9 +680,9 @@ def _(
         summary["sigma_M_0_norm"].to_numpy(),
     )
     diagnostics_with_sigma = pd.DataFrame([
-        {"method": r"I: $M_r$ (half-height, H=0)",                     "Tc_K": _tc_M_r,    "sigma_Tc_K": _stc_M_r},
-        {"method": rf"II: $M_\mathrm{{sat}}$ (half-height, H=±{H_SAT:.2f} A/m)", "Tc_K": _tc_M_sat, "sigma_Tc_K": _stc_M_sat},
-        {"method": r"III: $M_0$ (half-height, sat. extrap.→H=0)",      "Tc_K": _tc_M_0,    "sigma_Tc_K": _stc_M_0},
+        {"method": r"$M_\mathrm{r}$ (half-height, H=0)",                     "Tc_K": _tc_M_r,    "sigma_Tc_K": _stc_M_r},
+        {"method": rf"$M_\mathrm{{sat}}$ (half-height, H=±{H_SAT:.2f} A/m)", "Tc_K": _tc_M_sat, "sigma_Tc_K": _stc_M_sat},
+        {"method": r"$M_0$ (half-height, sat. extrap.→H=0)",      "Tc_K": _tc_M_0,    "sigma_Tc_K": _stc_M_0},
     ])
     return (
         H_SAT,
@@ -1054,7 +1054,7 @@ def _(K_best, Tc_C, Tc_K, mo, odr_result, sigma_Tc_K):
 
     $$
     T_c^\mathrm{{MF}} \;=\; {Tc_K:.1f}\;\mathrm{{K}}\;=\;{Tc_C:.1f}\,^\circ\mathrm{{C}}
-    \quad(\chi^2/\nu={odr_result.redchi:.2f},\;\text{{p-probability}}={odr_result.p_value:.3f},\;\mathrm{{DOF}}={odr_result.dof},\;\sigma_{{T_c}}=\pm{sigma_Tc_K:.1f}\,\mathrm{{K}}).
+    \quad(\chi^2/\nu={odr_result.redchi:.2f},\;\text{{p-value}}={odr_result.p_value:.3f},\;\mathrm{{DOF}}={odr_result.dof},\;\sigma_{{T_c}}=\pm{sigma_Tc_K:.1f}\,\mathrm{{K}}).
     $$
     """)
     return
@@ -1128,13 +1128,13 @@ def _(
         T_all[fit_mask], M0_sq_all[fit_mask] / scale,
         xerr=sT_all[fit_mask], yerr=sM0_sq_all[fit_mask] / scale,
         fmt="o", color="C0", markersize=3.6, elinewidth=0.8,
-        alpha=0.9, label=rf"fit window ($K^{{*}}={K_best}$ pts)",
+        alpha=0.9, label=rf"fit window ($N_\mathrm{{fit}}={K_best}$)",
     )
 
     ax_msq.plot(
         T_line, _line_y,
         "-", color="C3", linewidth=2.0,
-        label=rf"mean-field $T_c={Tc_K:.1f}\pm{sigma_Tc_K:.1f}\,\mathrm{{K}}$",
+        label=rf"mean-field $T_\mathrm{{c}}={Tc_K:.1f}\pm{sigma_Tc_K:.1f}\,\mathrm{{K}}$",
     )
 
     _residual = (
@@ -1170,21 +1170,20 @@ def _(
     if np.isfinite(Tc_headline):
         ax_msq.axvline(
             Tc_headline, color="C2", linewidth=1.4, linestyle="-",
-            label=rf"half-height headline $T_c^{{\mathrm{{app}}}}={Tc_headline:.1f}\pm{sigma_Tc_headline_stat:.2f}\,\mathrm{{K}}$",
+            label=rf"half-height headline $T_\mathrm{{c}}^{{\mathrm{{app}}}}={Tc_headline:.1f}\pm{sigma_Tc_headline_stat:.1f}\,\mathrm{{K}}$",
         )
 
     ax_msq.set_xlim(_x_lo, _x_hi)
     ax_msq.set_ylim(_y_lo, _y_hi)
     ax_msq.set_xlabel(r"$T$ (K)")
-    ax_msq.set_ylabel(r"$M_0^2$ [$(\mathrm{kA}\,\mathrm{m}^{-1})^2$]")
-    ax_msq.set_title(r"Mean-field $M_0^2(T)$ fit (Method III cross-check)")
+    ax_msq.set_ylabel(r"$M_0^2$ ($\mathrm{kA}^2\,\mathrm{m}^{-2}$)")
     ax_msq.minorticks_on()
     ax_msq.grid(True, which="major", alpha=0.25)
     ax_msq.grid(True, which="minor", alpha=0.10)
     ax_msq.legend(loc="upper right", fontsize=8, framealpha=0.95)
 
     ax_msq_res.set_xlabel(r"$T$ (K), fit window")
-    ax_msq_res.set_ylabel(r"$M_0^2 - f(T)$ [$(\mathrm{kA}\,\mathrm{m}^{-1})^2$]")
+    ax_msq_res.set_ylabel(r"$M_0^2 - f(T)$" + "\n" + r"($\mathrm{kA}^2\,\mathrm{m}^{-2}$)")
     ax_msq_res.minorticks_on()
     ax_msq_res.grid(True, which="major", alpha=0.25)
     ax_msq_res.grid(True, which="minor", alpha=0.10)
@@ -1236,7 +1235,6 @@ def _(
     ax_loops.set_xlim(-1.05 * max_abs_h, 1.05 * max_abs_h)
     ax_loops.set_xlabel(r"$H$ (A m$^{-1}$)")
     ax_loops.set_ylabel(r"$M_\mathrm{corr}$ (kA m$^{-1}$)")
-    ax_loops.set_title("Representative hysteresis half-loops")
     ax_loops.minorticks_on()
     ax_loops.grid(True, which="major", alpha=0.25)
     ax_loops.grid(True, which="minor", alpha=0.10)
@@ -1258,7 +1256,7 @@ def _(Line2D, diagnostics, np, plt, save_figure, smooth, summary):
     temperature = summary["temperature_K"].to_numpy()
     sigma_T_arr = summary["sigma_T_K"].to_numpy()
     series = [
-        ("M_r_norm",    "sigma_M_r_norm",    r"$M_r$ ($H=0$)",                         "C0", "o"),
+        ("M_r_norm",    "sigma_M_r_norm",    r"$M_\mathrm{r}$ ($H=0$)",                         "C0", "o"),
         ("M_sat_norm",  "sigma_M_sat_norm",  r"$M_\mathrm{sat}$ ($H=\pm H_\mathrm{sat}$)",  "C3", "s"),
         ("M_0_norm",    "sigma_M_0_norm",    r"$M_0$ (sat. extrap. to $H=0$)",       "C2", "^"),
     ]
@@ -1278,7 +1276,7 @@ def _(Line2D, diagnostics, np, plt, save_figure, smooth, summary):
             color=_color,
             ecolor=_color,
             elinewidth=0.5,
-            alpha=0.28,
+            alpha=0.7,
         )
         ax_methods.plot(temperature, smooth(_values), color=_color, linewidth=2.1)
         legend_handles.append(Line2D([0], [0], color=_color, linewidth=2.1, label=_label))
@@ -1297,18 +1295,17 @@ def _(Line2D, diagnostics, np, plt, save_figure, smooth, summary):
             label="steepest slope" if _i == 0 else None,
         )
 
-    ax_methods.axhline(0.5, color="0.45", linestyle="-", linewidth=0.8, alpha=0.35)
+    ax_methods.axhline(0.5, color="0.45", linestyle="-", linewidth=0.8, alpha=0.55)
     ax_methods.set_xlabel(r"$T$ (K)")
     ax_methods.set_ylabel("normalized signal")
     ax_methods.set_ylim(-0.03, 1.03)
-    ax_methods.set_title("Normalized Curie-transition signals")
     ax_methods.minorticks_on()
     ax_methods.grid(True, which="major", alpha=0.25)
     ax_methods.grid(True, which="minor", alpha=0.10)
 
     legend_handles.extend([
-        Line2D([0], [0], color="0.45", linestyle="--", linewidth=1.0, label="half-height $T_c$"),
-        Line2D([0], [0], color="0.15", linestyle=":", linewidth=1.2, label="steepest-slope $T_c$"),
+        Line2D([0], [0], color="0.45", linestyle="--", linewidth=1.0, label=r"half-height $T_\mathrm{c}$"),
+        Line2D([0], [0], color="0.15", linestyle=":", linewidth=1.2, label=r"steepest-slope $T_\mathrm{c}$"),
     ])
     ax_methods.legend(handles=legend_handles, loc="upper right")
 
@@ -1356,7 +1353,7 @@ def _(
 
     _ax_field.errorbar(
         _retained_temperature,
-        summary["branch_hmax_A_per_m"].to_numpy(),
+        summary["branch_hmax_A_per_m"].to_numpy() / 1000.0,
         xerr=summary["sigma_T_K"].to_numpy(),
         fmt="o", color="C0", ecolor="C0", alpha=0.70,
         markersize=3.0, elinewidth=0.5, capsize=1.5,
@@ -1367,13 +1364,12 @@ def _(
         label="field-ready cut",
     )
     _ax_field.set_xlabel(r"$T$ (K)")
-    _ax_field.set_ylabel(r"$|H|_\mathrm{max}$ (A m$^{-1}$)")
-    _ax_field.set_title("Drive-field plateau check: common branch")
+    _ax_field.set_ylabel(r"$|H|_\mathrm{max}$ (kA m$^{-1}$)")
+    _ax_field.set_title("Drive-field plateau")
     _ax_field.grid(True, which="major", alpha=0.25)
     _ax_field.minorticks_on()
     _ax_field.grid(True, which="minor", alpha=0.10)
     _ax_field.legend(loc="lower right", fontsize=8, framealpha=0.95)
-    _fig_acq.suptitle("Curie acquisition quality control", fontsize=11)
 
     save_figure(_fig_acq, "curie_acquisition_qc")
     _fig_acq
@@ -1687,7 +1683,7 @@ def _(
     odr_fit,
     sigma_T_K,
 ):
-    # Method IV (qualitative cross-check): Curie-Weiss above T_c.
+    # Method IV (qualitative cross-check): Curie–Weiss above T_c.
     # In the paramagnetic regime, chi(T) = M/H = C / (T - T_c), so
     # 1/chi = (T - T_c)/C is linear in T with T-axis intercept T_c.
     # Per loop we fit an apparent chi from the full loop's M(H) data:
@@ -1729,7 +1725,7 @@ def _(
         Tc_seed_CW = float(np.nanmedian(T_arr))
 
     # Buffer above the seed avoids the immediate transition shoulder
-    # where finite-H smearing distorts chi (the Curie-Weiss form is
+    # where finite-H smearing distorts chi (the Curie–Weiss form is
     # only valid asymptotically far above T_c; closer in, mean-field
     # corrections kick in).
     CW_BUFFER_K = 5.0
@@ -1813,7 +1809,7 @@ def _(
     sigma_T_K,
     sigma_chi_vals,
 ):
-    # Plot 1/chi vs T with the Curie-Weiss line and Tc x-intercept.
+    # Plot 1/chi vs T with the Curie–Weiss line and Tc x-intercept.
     # Shade the excluded region so the fit window edge is unambiguous.
     fig_cw, (ax_cw, ax_cw_res) = plt.subplots(
         2, 1,
@@ -1852,7 +1848,7 @@ def _(
 
     ax_cw.axvspan(
         _x_lo, _edge, color="0.85", alpha=0.35, zorder=0,
-        label=rf"excluded ($T \leq T_c^\mathrm{{seed}}+{CW_BUFFER_K:.0f}\,\mathrm{{K}}$)",
+        label=rf"excluded ($T \leq T_\mathrm{{c}}^\mathrm{{seed}}+{CW_BUFFER_K:.0f}\,\mathrm{{K}}$)",
     )
 
     _excl = ~_used
@@ -1875,7 +1871,7 @@ def _(
         _T_line = np.linspace(max(Tc_CW, _x_lo), _x_hi, 200)
         ax_cw.plot(
             _T_line, m_CW * _T_line + b_CW, "-", color="C3", linewidth=2.0,
-            label=rf"apparent Curie–Weiss $T_c={Tc_CW:.1f}\pm{sigma_Tc_CW:.1f}\,\mathrm{{K}}$",
+            label=rf"apparent Curie–Weiss $T_\mathrm{{c}}={Tc_CW:.1f}\pm{sigma_Tc_CW:.1f}\,\mathrm{{K}}$",
         )
         if _x_lo <= Tc_CW <= _x_hi:
             ax_cw.axvline(Tc_CW, color="C3", linewidth=0.8, linestyle=":")
@@ -1942,7 +1938,6 @@ def _(
     ax_cw.set_ylim(_y_lo, _y_hi)
     ax_cw.set_xlabel(r"$T$ (K)")
     ax_cw.set_ylabel(r"$1/\chi$ (arb. units)")
-    ax_cw.set_title(r"Apparent Curie–Weiss $1/\chi(T)$ above $T_c$ (Method IV check)")
     ax_cw.minorticks_on()
     ax_cw.grid(True, which="major", alpha=0.25)
     ax_cw.grid(True, which="minor", alpha=0.10)
@@ -2186,7 +2181,7 @@ def _(
         )
         _ax_tc.axhline(
             Tc_headline, color="C0", linewidth=1.5,
-            label=rf"headline $T_c^{{\mathrm{{app}}}}={Tc_headline:.1f}$ K",
+            label=rf"headline $T_\mathrm{{c}}^{{\mathrm{{app}}}}={Tc_headline:.1f}$ K",
         )
 
     _x_positions = []
@@ -2194,21 +2189,22 @@ def _(
     _group_edges = []  # (x_left, x_right, label)
 
     _finite_methods = diagnostics_with_sigma.dropna(subset=["Tc_K"])
-    _method_labels = [r"$M_r$", r"$M_\mathrm{sat}$", r"$M_0$"]
+    _method_labels = [r"$M_\mathrm{r}$", r"$M_\mathrm{sat}$", r"$M_0$"]
     _group_left_I = 0
     for _x, (_, _row) in enumerate(_finite_methods.iterrows()):
         _ax_tc.errorbar(
             _x, _row["Tc_K"], yerr=_row["sigma_Tc_K"],
             fmt="o", color="C0", ecolor="C0", capsize=3, markersize=6,
-            label="run first: half-height (I, II, III)" if _x == 0 else None,
+            label="run first: half-height (1, 2, 3)" if _x == 0 else None,
         )
         _x_positions.append(_x)
         _x_labels.append(_method_labels[_x] if _x < len(_method_labels) else _row["method"])
-    _group_edges.append((_group_left_I, len(_x_positions) - 1, "Methods I–III"))
+    _group_edges.append((_group_left_I, len(_x_positions) - 1, "Methods 1–3"))
 
     _finite_runs = cross_run.dropna(subset=["Tc_K_half"]) if "Tc_K_half" in cross_run.columns else cross_run.iloc[0:0]
     _start = len(_x_positions) + 1
     _group_left_R = _start
+    _run_label_map = {"first": "Run 1", "second": "Run 2", "third": "Run 3"}
     for _j, (_, _row) in enumerate(_finite_runs.iterrows()):
         _x = _start + _j
         _ax_tc.errorbar(
@@ -2217,7 +2213,7 @@ def _(
             label=r"cross-run $M_0$ half-height" if _j == 0 else None,
         )
         _x_positions.append(_x)
-        _x_labels.append(str(_row["run"]))
+        _x_labels.append(_run_label_map.get(str(_row["run"]), str(_row["run"])))
     if _finite_runs.shape[0]:
         _group_edges.append((_group_left_R, _x_positions[-1], "Run 1/2/3"))
 
@@ -2250,6 +2246,10 @@ def _(
             0.5 * (_b + _next_a), color="0.85", linewidth=0.8,
             linestyle=":", zorder=0,
         )
+    for _a, _b, _label in _group_edges:
+        _ax_tc.text(0.5 * (_a + _b), 1.02, _label,
+                    ha="center", va="bottom", fontsize=9, color="0.25",
+                    transform=_ax_tc.get_xaxis_transform(), clip_on=False)
 
     # Bound y to the region populated by point estimates. Method-IV
     # CW's broad propagated errorbar would otherwise stretch the
@@ -2271,8 +2271,7 @@ def _(
         _ax_tc.set_ylim(_y_lo, _y_hi)
 
     _ax_tc.set_xticks(_x_positions, _x_labels)
-    _ax_tc.set_ylabel(r"$T_c$ (K)")
-    _ax_tc.set_title(r"Curie temperature: estimates and checks")
+    _ax_tc.set_ylabel(r"$T_\mathrm{c}$ (K)")
     _ax_tc.grid(True, axis="y", which="major", alpha=0.25)
     _ax_tc.minorticks_on()
     _ax_tc.grid(True, axis="y", which="minor", alpha=0.10)

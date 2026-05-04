@@ -55,7 +55,7 @@ def _(mo):
 
     The copper-gap measurement is the only fitted model in this notebook. For
     that fit the notebook reports the fit parameters, relative errors,
-    $\chi^2/\nu$, p-probability, DOF, and a data-minus-fit plot. The smooth curves in
+    $\chi^2/\nu$, p-value, DOF, and a data-minus-fit plot. The smooth curves in
     Part A are only guide curves through the measured envelope points; they are
     not fitted physical models.
     """)
@@ -376,6 +376,17 @@ def _(FIG_DIR, PchipInterpolator, np, plt, pt1):
                   ecolor=C_MU, elinewidth=0.9, capsize=2.5, label=r'$\mu_{\mathrm{r}}$ data')
     axMu.axvline(pt1.loc[peak_idx, 'H'], color=C_MU,
                  linestyle=':', linewidth=1.0, alpha=0.75, label=r'$\mu_{\mathrm{r}}$ peak')
+    _peak_H = pt1.loc[peak_idx, 'H']
+    _peak_mu = pt1.loc[peak_idx, 'mu_rel']
+    _peak_smu = pt1.loc[peak_idx, 's_mu_rel']
+    axMu.annotate(
+        rf"$\mu_\mathrm{{r}}^{{\max}}\approx{_peak_mu:.0f}\pm{_peak_smu:.0f}$"
+        + "\n" + rf"at $H\approx{_peak_H:.0f}$ A m$^{{-1}}$",
+        xy=(_peak_H, _peak_mu), xycoords='data',
+        xytext=(0.55, 0.85), textcoords='axes fraction',
+        fontsize=8, ha='left', va='top',
+        arrowprops=dict(arrowstyle='-', color='0.4', lw=0.6),
+    )
     axMu.set_xlabel(r'$H$ (A m$^{-1}$)')
     axMu.set_ylabel(r'$\mu_{\mathrm{r}}=\mu/\mu_0$')
     axMu.minorticks_on()
@@ -390,8 +401,6 @@ def _(FIG_DIR, PchipInterpolator, np, plt, pt1):
     _mu_hi = float((pt1['mu_rel'] + pt1['s_mu_rel']).max())
     _mu_pad = 0.06 * (_mu_hi - _mu_lo)
     axMu.set_ylim(max(0.0, _mu_lo - _mu_pad), _mu_hi + _mu_pad)
-
-    axB.set_title('Peak-envelope magnetization curve and relative permeability: iron toroid')
 
     fig.savefig(FIG_DIR / 'fig_BH_mu.pdf', bbox_inches='tight')
     fig.savefig(FIG_DIR / 'fig_BH_mu.png', bbox_inches='tight', dpi=600)
@@ -511,7 +520,7 @@ def _(
 
     RUNS = {
         'vacuum-permeability-a': dict(label='Three copper plates to none', marker='o', color='C0'),
-        'vacuum-permeability-b': dict(label='Five copper plates to none',  marker='s', color='C2'),
+        'vacuum-permeability-b': dict(label='Five copper plates to none',  marker='s', color='C1'),
     }
     fits = {sheet: fit_gap(sheet) for sheet in RUNS}
 
@@ -530,7 +539,7 @@ def _(
         (r'$n_\sigma$ vs CODATA',                lambda f: rf'${nsigma(f["mu0_exp"], MU0_THEO_U):.1f}$'),
         (r'$\mu_{\mathrm{iron}}/\mu_0$',         lambda f: fmt(f['mu_iron'] / MU0_THEO)),
         (r'$\chi^2/\nu$',                        lambda f: rf'${f["result"].redchi:.2f}\;({f["result"].chi2:.2f}/{f["result"].dof})$'),
-        (r'p-probability',                       lambda f: rf'${f["result"].p_value:.3f}$'),
+        (r'p-value',                             lambda f: rf'${f["result"].p_value:.3f}$'),
         (r'DOF',                                 lambda f: rf'${f["result"].dof}$'),
     ]
     _run_cols = ' | '.join(RUNS[s]['label'] for s in fits)
@@ -567,8 +576,7 @@ def _(FIG_DIR, RUNS, fits, np, plt):
             Lp_mm, f['y_fit'], xerr=sx_mm, yerr=f['sy_fit'],
             fmt=style['marker'], color=style['color'], mfc='white', markersize=5,
             ecolor=style['color'], elinewidth=0.9, capsize=2.5,
-            label=rf"{style['label']} ($\langle B\rangle\approx{f['B_mean']:.2f}$ T,"
-                  rf" $\chi^2/\nu={r.redchi:.2f}$, p-prob. ${r.p_value:.2f}$)",
+            label=rf"{style['label']}: $\langle B\rangle\!\approx\!{f['B_mean']:.2f}$ T, $\chi^2/\nu={r.redchi:.2f}$, $p={r.p_value:.2f}$",
         )
         xs_m = np.linspace(0, f['x'].max() * 1.05, 60)
         ax_fit.plot(xs_m * 1e3, slope_NIB * xs_m + intercept_NIB,
@@ -584,7 +592,6 @@ def _(FIG_DIR, RUNS, fits, np, plt):
         _draw(_sheet, _f)
 
     ax_fit.set_ylabel(r'$NI/B$ (A T$^{-1}$)')
-    ax_fit.set_title(r"Vacuum permeability: $NI/B$ vs width of copper plates")
     ax_fit.legend(loc='upper left')
     ax_fit.minorticks_on()
     ax_fit.grid(True, which='major', alpha=0.25)
@@ -603,7 +610,7 @@ def _(FIG_DIR, RUNS, fits, np, plt):
         if np.isfinite(_res_lim) and _res_lim > 0:
             ax_res.set_ylim(-1.12 * _res_lim, 1.12 * _res_lim)
     ax_res.set_xlabel(r"$L'$ (mm)")
-    ax_res.set_ylabel(r"$(NI/B)-f(L')$ (A T$^{-1}$)")
+    ax_res.set_ylabel(r"residual (A T$^{-1}$)")
     ax_res.minorticks_on()
     ax_res.grid(True, which='major', alpha=0.25)
     ax_res.grid(True, which='minor', alpha=0.10)
