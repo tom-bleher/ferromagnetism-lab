@@ -1,7 +1,7 @@
 import marimo
 
 __generated_with = "0.23.1"
-app = marimo.App(width="medium", app_title="Curie temperature sketch")
+app = marimo.App(width="medium", app_title="Curie temperature analysis")
 
 
 @app.cell(hide_code=True)
@@ -16,7 +16,9 @@ def _(mo):
     mo.md(r"""
     # Curie-temperature processing notebook
 
-    Processing for the measured Curie run.
+    Processing for the three measured Curie scans. The detailed diagnostic
+    figures use the best-covered scan (`first`); the same pipeline is then
+    applied to `second` and `third` to quantify drive-setting sensitivity.
 
     Scope:
 
@@ -492,7 +494,7 @@ def _(background_intercept, background_slope, high_temperature_mask, mo):
     mo.md(rf"""
     **Background removal**
 
-    The guide notes that above $T_c$ the sample still has field-induced magnetization. We fit $\chi_\mathrm{{bg}}$ on the highest-T quartile (`{int(high_temperature_mask.sum())}` loops) so the choice is robust to the unknown $T_c$ — every loop in this quartile sits well above the transition for any sample with $T_c$ below the run's maximum temperature. The fit form is
+    The guide notes that above $T_c$ the sample still has field-induced magnetization. We fit $\chi_\mathrm{{bg}}$ on the highest-T quartile (`{int(high_temperature_mask.sum())}` loops) as an empirical linear high-temperature background. This avoids choosing a circular fixed $T_c$ cutoff, but it is still a modelling choice; for marginal coverage scans it can include transition-tail data and is therefore treated as part of the method systematic. The fit form is
 
     $$
     M_\mathrm{{bg}}(H)=aH+b.
@@ -856,7 +858,7 @@ def _(
 
     {table_md(diag, ["method", "half_height_K", "steepest_slope_K", "steepest_slope_value"])}
 
-    **Half-height $T_c$ with local uncertainty** for all three
+    **Half-height $T_{1/2}^\mathrm{app}$ with local uncertainty** for all three
     methods. Each row is the half-height crossing temperature; the
     local uncertainty uses the temperature smearing and the scatter of
     the per-loop fit. Method III also feeds the linear $M_0^2(T)$
@@ -1297,7 +1299,7 @@ def _(Line2D, diagnostics, np, plt, save_figure, smooth, summary):
 
     ax_methods.axhline(0.5, color="0.45", linestyle="-", linewidth=0.8, alpha=0.55)
     ax_methods.set_xlabel(r"$T$ (K)")
-    ax_methods.set_ylabel(r"$M/M_\mathrm{sat}$")
+    ax_methods.set_ylabel("min-max normalized proxy")
     ax_methods.set_ylim(-0.03, 1.03)
     ax_methods.minorticks_on()
     ax_methods.grid(True, which="major", alpha=0.25)
@@ -1465,13 +1467,15 @@ def _(
         if ready.size == 0:
             return None, [], []
         keep = np.arange(int(ready[0]), len(df))
+        T_retained = T_K[keep]
         common_hmax = float(hmax[keep].min())
         H_sat = 0.98 * common_hmax
 
-        # Use the top quartile of the full run as the paramagnetic regime,
-        # matching the main pipeline. This avoids a fixed room-temperature
-        # cutoff while keeping the background definition independent of the
-        # eventual T_c estimate.
+        # Use the top quartile of the full run as an empirical high-temperature
+        # background, matching the main pipeline. This avoids a fixed
+        # room-temperature cutoff while keeping the background definition
+        # independent of the eventual T_c estimate. It is not assumed to be a
+        # perfectly clean asymptotic Curie-Weiss regime for every run.
         bg_mask = T_K >= np.quantile(T_K, 0.75)
         Hb, Mb = [], []
         for i in np.flatnonzero(bg_mask):
@@ -1554,6 +1558,8 @@ def _(
                 "n_loops": int(len(keep)),
                 "T_min_K": float(T_K.min()),
                 "T_max_K": float(T_K.max()),
+                "T_retained_min_K": float(T_retained.min()),
+                "T_retained_max_K": float(T_retained.max()),
             })
 
         finite_method_rows = [
@@ -1703,6 +1709,8 @@ def _(
             "n_loops": int(len(keep)),
             "T_min_K": float(T_K.min()),
             "T_max_K": float(T_K.max()),
+            "T_retained_min_K": float(T_retained.min()),
+            "T_retained_max_K": float(T_retained.max()),
             "redchi": redchi_mf,
         }, method_rows, run_curve_records
 
@@ -2119,12 +2127,9 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
     # estimators because they are model-free: each locates the
     # temperature where the smoothed proxy crosses 50% of its dynamic
     # range. The mean-field M_0^2(T) line zero-crossing (Method III in
-    # absolute units) is reported as a cross-check; it sits ~15-20 K
-    # above the half-height numbers because the mean-field square-root
-    # form is only an approximation in a narrow window below T_c, so its
-    # zero crossing systematically overshoots when fit over any window
-    # wide enough to have decent statistics. The disagreement between
-    # the two estimator families is itself a methodological systematic.
+    # absolute units) is reported as a cross-check. It is intentionally
+    # not pooled into the headline because it uses a model-dependent
+    # narrow-window extrapolation of the same saturation-tail quantity.
     finite_hh = diagnostics_with_sigma.dropna(subset=["Tc_K"])
     hh_tcs = finite_hh["Tc_K"].to_numpy(dtype=float)
     hh_sigmas = finite_hh["sigma_Tc_K"].to_numpy(dtype=float)
@@ -2169,23 +2174,15 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
     # methodological systematic), the run-to-run spread of the *half-height*
     # T_c per run (cross-run systematic on the same estimator family), and
     # the fully-correlated thermometer absolute-accuracy term. The preferred
-    # high-drive budget excludes the low-drive third run; the guide-facing
-    # conservative budget retains all three drive settings as a field-amplitude
-    # systematic rather than hiding that scan.
-    # The mean-field-vs-half-height shift is NOT
-    # added in quadrature here: the mean-field model is not adopted as
-    # the headline estimator (its narrow-window linear approximation
-    # produces a chi^2/nu >> 1 fit and a broad error bar that
-    # is too wide to be informative), so quoting the gap to it as a
-    # systematic on the half-height result would punish the headline
-    # for an estimator we have explicitly chosen not to use. Instead,
-    # we report the mean-field T_c separately as a qualitative
-    # cross-check; the methodological tension within each run is
-    # already captured by sigma_method.
+    # high-drive budget excludes the low-drive third run; the conservative
+    # all-drive envelope retains all three drive settings as a stress test.
+    # The mean-field-vs-half-height shift is not added in quadrature here:
+    # the mean-field model is not adopted as the headline estimator, and
+    # its methodological information is reported separately.
     syst_total = float(np.hypot(np.hypot(method_spread, run_spread), SIGMA_T_ABS_K))
     syst_total_all = float(np.hypot(np.hypot(method_spread, run_spread_all), SIGMA_T_ABS_K))
-    # Display only: gap between the failing mean-field fit and the
-    # half-height headline, kept for context but not in the systematic.
+    # Display only: gap between the mean-field check and the half-height
+    # headline, kept for context but not in the systematic.
     mf_shift_display = float(abs(Tc_K - Tc_headline)) if np.isfinite(Tc_K) and np.isfinite(Tc_headline) else 0.0
 
     def _fmt_k(x, ndigits=1):
@@ -2195,11 +2192,15 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
         _name = f"run `{r['run']}`"
         _frac = r.get("drive_fraction_vs_first", np.nan)
         _drive_str = f"{_frac:.2f}" if np.isfinite(_frac) else "—"
+        _t0 = r.get("T_retained_min_K", np.nan)
+        _t1 = r.get("T_retained_max_K", np.nan)
+        _t_range = f"{_t0:.1f}-{_t1:.1f}" if np.isfinite(_t0) and np.isfinite(_t1) else "—"
         _flag = "low-drive check" if bool(r.get("low_drive_flag", False)) else "preferred"
         return "| " + " | ".join([
             _name,
             f"{r['drive_current_A_rms']:.2f}",
             _drive_str,
+            _t_range,
             _fmt_k(r.get("Tc_M_r_K", np.nan)),
             _fmt_k(r.get("Tc_M_sat_K", np.nan)),
             _fmt_k(r.get("Tc_M_0_K", np.nan)),
@@ -2211,6 +2212,12 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
         _row_run(r)
         for _, r in finite_runs.iterrows() if np.isfinite(r[_run_estimator_col])
     ]
+
+    _third_run = finite_runs.loc[finite_runs["run"] == "third"] if "run" in finite_runs.columns else finite_runs.iloc[0:0]
+    if not _third_run.empty and "T_retained_min_K" in _third_run.columns:
+        third_retained_min = float(_third_run["T_retained_min_K"].iloc[0])
+    else:
+        third_retained_min = float("nan")
 
     method_rows = [
         f"| {r['method']} | {r['Tc_K']:.2f} | {r['sigma_Tc_K']:.2f} | (half-height local fit) |"
@@ -2225,32 +2232,35 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
 
     **Half-height crossings — three methods on run `first`** (headline family):
 
-    | Method | $T_c$ (K) | local $\sigma_{{T_c}}$ (K) | source |
+    | Method | $T_{{1/2}}^\mathrm{{app}}$ (K) | local $\sigma_T$ (K) | source |
     |---|---|---|---|
     {chr(10).join(method_rows)}
 
     **All three physical Curie scans** (repeated at different primary drive settings):
 
-    | Run | $I_\mathrm{{rms}}$ (A) | drive frac. | $M_r$ (K) | $M_\mathrm{{sat}}$ (K) | $M_0$ (K) | method mean (K) | status |
-    |---|---|---|---|---|---|---|---|
+    | Run | $I_\mathrm{{rms}}$ (A) | drive frac. | retained $T$ (K) | $M_r$ (K) | $M_\mathrm{{sat}}$ (K) | $M_0$ (K) | method mean (K) | status |
+    |---|---|---|---|---|---|---|---|---|
     {chr(10).join(cross_rows_methods)}
 
     The low-drive third run is not an interchangeable repeat: it is the
-    required different-resistance scan and shows field-amplitude sensitivity.
-    The preferred high-drive run-spread term uses only `first` and `second`,
-    while the reported conservative all-drive budget retains all three scans:
+    required different-resistance scan and shows field-amplitude and coverage
+    sensitivity. After the field-ready cut it starts at
+    `{third_retained_min:.1f}` K, so it lacks the cold plateau present in the
+    first two scans. The preferred high-drive run-spread term uses only `first`
+    and `second`, while the conservative all-drive envelope retains all three
+    scans:
     $\sigma_\text{{run}}={run_spread:.1f}\,\mathrm{{K}}$ versus
     $\sigma_\text{{run,all}}={run_spread_all:.1f}\,\mathrm{{K}}$.
 
-    **Reported value (central value from run `first`; uncertainty retains all drive settings):**
+    **Preferred reported value** (central value from run `first`; uncertainty from complete high-drive scans):
 
     $$
-    T_c^\mathrm{{app}} \;=\; {Tc_headline:.0f} \;\pm\; {syst_total_all:.0f}\;\mathrm{{K}}
-    \;=\; {Tc_headline_C:.0f}\pm{syst_total_all:.0f}\,^\circ\mathrm{{C}}.
+    T_{{1/2,\mathrm{{HD}}}}^\mathrm{{app}} \;=\; {Tc_headline:.0f} \;\pm\; {syst_total:.0f}\;\mathrm{{K}}
+    \;=\; {Tc_headline_C:.0f}\pm{syst_total:.0f}\,^\circ\mathrm{{C}}.
     $$
 
-    If the low-drive scan is treated only as a diagnostic, the high-drive
-    preferred budget would be $\pm{syst_total:.0f}\,\mathrm{{K}}$ instead.
+    Folding the low-drive incomplete scan into the budget as a stress-test
+    envelope expands this to $\pm{syst_total_all:.0f}\,\mathrm{{K}}$.
 
     This is an operational finite-field transition midpoint, not a clean
     zero-field thermodynamic Curie temperature. The local crossing
@@ -2259,10 +2269,10 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
     The unrounded local repeatability of the common pipeline is
     $\sigma={sigma_Tc_headline_stat:.2f}\,\mathrm{{K}}$.
 
-    The conservative quoted uncertainty combines
+    The preferred quoted uncertainty combines
 
     - method-to-method spread of the half-height crossings within run `first`: $\sigma_\text{{method}}={method_spread:.1f}\,\mathrm{{K}}$;
-    - run-to-run spread of the per-run three-method estimates across all drive settings: $\sigma_\text{{run,all}}={run_spread_all:.1f}\,\mathrm{{K}}$;
+    - run-to-run spread of the per-run three-method estimates across the complete high-drive scans: $\sigma_\text{{run}}={run_spread:.1f}\,\mathrm{{K}}$;
     - thermometer absolute-accuracy term: $\sigma_\text{{therm}}={SIGMA_T_ABS_K:.1f}\,\mathrm{{K}}$;
 
     in quadrature.
@@ -2275,26 +2285,11 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
     The $M_0^2(T)\propto T_c-T$ form is a near-$T_c$ approximation.
     With a narrow transition window,
     the weighted linear fit gives $T_c^\mathrm{{MF}}={Tc_K:.1f}\pm{sigma_Tc_K:.1f}\,\mathrm{{K}}$
-    ($\chi^2/\nu={odr_result.redchi:.2f}$). This sits
-    ${mf_shift_display:.0f}\,\mathrm{{K}}$ above the half-height headline
-    and the Curie–Weiss paramagnetic-side estimate (both at $\sim$213–217 K).
-    Two readings of the disagreement:
-
-    - *Mean-field is the wrong model for this data.* Half-height
-      (model-free) and Curie–Weiss (paramagnetic side) agree at
-      $\sim$213–217 K from independent inputs; the $M_0^2$ extrapolation
-      is sensitive to bias in the saturation-tail intercept $M_0$
-      itself, which can pull $T_c^\mathrm{{MF}}$ upward systematically.
-    - *Half-height is biased low by broadening.* A composition-broadened
-      transition (Monel is a Ni–Cu solid solution) places the
-      inflection point well below the true $T_c$ where $M\to0$, and
-      the mean-field extrapolation is then the more physical estimate.
-
-    We cannot decide between these from this run alone, so the
-    mean-field $T_c$ is kept as a qualitative check only and
-    is *not* folded into the headline systematic. The headline remains
-    the model-free apparent half-height transition; the gap
-    is reported here verbatim so a reader can apply their own judgement.
+    ($\chi^2/\nu={odr_result.redchi:.2f}$). This is ${mf_shift_display:.1f}\,\mathrm{{K}}
+    from the half-height headline and therefore supports the same transition
+    scale. It is kept as a qualitative check, not pooled into the headline,
+    because it is a model-dependent extrapolation of the saturation-tail
+    intercept rather than a direct operational midpoint.
 
     **Qualitative check: Curie–Weiss $T_c$ from $1/\chi(T)$ above $T_c$.**
     Independently of the half-height (which uses the below-$T_c$ side)
@@ -2347,12 +2342,12 @@ def _(
     if np.isfinite(Tc_headline) and np.isfinite(syst_total_all):
         _ax_tc.axhspan(
             Tc_headline - syst_total_all, Tc_headline + syst_total_all,
-            color="C0", alpha=0.06, label=r"reported all-drive uncertainty",
+            color="C0", alpha=0.06, label=r"all-drive diagnostic envelope",
         )
     if np.isfinite(Tc_headline) and np.isfinite(syst_total):
         _ax_tc.axhspan(
             Tc_headline - syst_total, Tc_headline + syst_total,
-            color="C0", alpha=0.12, label=r"high-drive-only uncertainty",
+            color="C0", alpha=0.12, label=r"preferred high-drive uncertainty",
         )
     if np.isfinite(Tc_headline) and np.isfinite(sigma_Tc_headline_stat):
         _ax_tc.axhspan(
@@ -2362,7 +2357,7 @@ def _(
         )
         _ax_tc.axhline(
             Tc_headline, color="C0", linewidth=1.5,
-            label=rf"headline $T_\mathrm{{c}}^{{\mathrm{{app}}}}={Tc_headline:.1f}$ K",
+            label=rf"headline $T_{{1/2}}^{{\mathrm{{app}}}}={Tc_headline:.1f}$ K",
         )
 
     _x_positions = []
