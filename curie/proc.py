@@ -138,7 +138,6 @@ def _():
         fig.savefig(FIG_DIR / f"{stem}.png", bbox_inches="tight", dpi=600)
 
     return (
-        DATA_DIR,
         DATA_FILE,
         DATA_XLSX,
         FIELD_READY_FRACTION,
@@ -858,8 +857,7 @@ def _(
 
     {table_md(diag, ["method", "half_height_K", "steepest_slope_K", "steepest_slope_value"])}
 
-    **Half-height $T_{1/2}^\mathrm{app}$ with local uncertainty** for all three
-    methods. Each row is the half-height crossing temperature; the
+    **Half-height $T_{{1/2}}^\mathrm{{app}}$ with local uncertainty** for all three methods. Each row is the half-height crossing temperature; the
     local uncertainty uses the temperature smearing and the scatter of
     the per-loop fit. Method III also feeds the linear $M_0^2(T)$
     check below.
@@ -1021,19 +1019,15 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, pd, summary):
     sigma_Tc_K = float(np.sqrt(max(0.0, var_Tc)))
     Tc_C = Tc_K - 273.15
     return (
-        FIT_UPPER_MARGIN_K,
-        K_MIN,
         K_best,
-        K_scan_table,
         M0_sq_all,
+        T_all,
         Tc_C,
         Tc_K,
-        T_all,
         fit_mask,
         msq_intercept,
         msq_slope,
         odr_result,
-        rescale,
         sM0_sq_all,
         sT_all,
         sigma_Tc_K,
@@ -1193,6 +1187,7 @@ def _(
     save_figure(fig_msq, "curie_method3_M0sq")
     fig_msq
     return
+
 
 @app.cell
 def _(
@@ -1418,7 +1413,7 @@ def _(
     _L = float(_apparatus["L (m)"])
     _A = float(_apparatus["A (m²)"])
     _B_per_Y = _Ry * _C / (_N2 * _A)
-    
+
     _I_rms_dict = {"first": 1.97, "second": 2.24, "third": 0.65}
 
     def _branches(row, xp, yp, xn, yn, h_per_x):
@@ -1749,7 +1744,7 @@ def _(FIG_DIR, cross_run, run_curves, run_method_tcs):
 
 
 @app.cell
-def _(cross_run, np, plt, run_curves, save_figure, smooth):
+def _(cross_run, plt, run_curves, save_figure, smooth):
     # Measured counterpart to the guide's finite-field sketch. We plot the
     # near-saturation branch-split proxy because it is evaluated at the drive
     # field itself, so it is the cleanest visual comparison of the three input
@@ -1940,7 +1935,6 @@ def _(
                 sigma_Tc_CW = float(np.sqrt(max(0.0, _var)))
         except Exception:
             cw_result = None
-
     return (
         CW_BUFFER_K,
         Tc_CW,
@@ -1950,7 +1944,6 @@ def _(
         cw_result,
         m_CW,
         mask_CW,
-        rescale_CW,
         redchi_CW,
         sigma_Tc_CW,
         sigma_chi_vals,
@@ -1971,8 +1964,8 @@ def _(
     np,
     plt,
     save_figure,
-    sigma_Tc_CW,
     sigma_T_K,
+    sigma_Tc_CW,
     sigma_chi_vals,
 ):
     # Plot 1/chi vs T with the Curie–Weiss line and Tc x-intercept.
@@ -2121,7 +2114,19 @@ def _(
 
 
 @app.cell(hide_code=True)
-def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr_result, redchi_CW, sigma_Tc_CW, sigma_Tc_K):
+def _(
+    SIGMA_T_ABS_K,
+    Tc_CW,
+    Tc_K,
+    cross_run,
+    diagnostics_with_sigma,
+    mo,
+    np,
+    odr_result,
+    redchi_CW,
+    sigma_Tc_CW,
+    sigma_Tc_K,
+):
     # Bottom-line. The half-height crossings of M_r, M_sat, and M_0
     # (Methods I, II, III in normalized form) are the headline
     # estimators because they are model-free: each locates the
@@ -2309,17 +2314,7 @@ def _(SIGMA_T_ABS_K, Tc_CW, Tc_K, cross_run, diagnostics_with_sigma, mo, np, odr
     """),
         kind="success",
     )
-    return (
-        Tc_headline,
-        Tc_headline_C,
-        method_spread,
-        mf_shift_display,
-        run_spread,
-        run_spread_all,
-        sigma_Tc_headline_stat,
-        syst_total,
-        syst_total_all,
-    )
+    return Tc_headline, sigma_Tc_headline_stat, syst_total, syst_total_all
 
 
 @app.cell
