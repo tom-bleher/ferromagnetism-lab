@@ -519,16 +519,13 @@ def _(
         # Pick the saturation-tail window with two literature-grounded gates:
         #   (i)  near-saturation pre-cut |M| >= frac * |M_0_seed|, where the
         #        seed comes from the guide's strict n_min-point linear fit
-        #        (the standard "M >= 0.95 M_s" rule from the law-of-approach
-        #        literature);
+        #        (the standard "M >= 0.95 M_s" near-saturation rule);
         #   (ii) slope-stability plateau: starting from the outermost point
         #        inside that pool, grow n one point at a time and stop when
         #        the linear slope drifts by more than slope_tol_sigma * sigma
         #        from the previous window. The largest n on the plateau is
         #        the data-driven boundary of the linear regime.
-        # Returns (h_window, m_window, n_used) ordered outermost-first so the
-        # downstream estimators (linear and law-of-approach) can share the
-        # same physical points.
+        # Returns (h_window, m_window, n_used) ordered outermost-first.
         H_arr = np.asarray(H, dtype=float)
         M_arr = np.asarray(M, dtype=float)
         order = _tail_order(H_arr, tail)
@@ -583,47 +580,6 @@ def _(
         b, sb = _linear_intercept(h, m)
         return b, sb, n_used
 
-    def sat_m0_loa_pair(
-        H_pos, M_pos, H_neg, M_neg,
-        n_min=5, frac=0.95, slope_tol_sigma=1.5, min_points_loa=8,
-    ):
-        # Symmetric law-of-approach fit on both saturation tails together:
-        #     M = s*M_0 + alpha*H + c/H, with s=+1 on the +H upper-branch
-        #     tail and s=-1 on the -H lower-branch tail.
-        # This keeps the same point-selection rule as the linear Method III
-        # but avoids estimating a fragile three-parameter LoA model from each
-        # narrow branch tail independently.
-        hp, mp, n_pos = _select_saturation_window(
-            H_pos, M_pos, "pos", n_min=n_min, frac=frac, slope_tol_sigma=slope_tol_sigma,
-        )
-        hn, mn, n_neg = _select_saturation_window(
-            H_neg, M_neg, "neg", n_min=n_min, frac=frac, slope_tol_sigma=slope_tol_sigma,
-        )
-        if min(n_pos, n_neg) < min_points_loa:
-            return float("nan"), float("nan"), n_pos, n_neg
-        h = np.concatenate([hp, hn])
-        m = np.concatenate([mp, mn])
-        sign = np.concatenate([np.ones_like(hp), -np.ones_like(hn)])
-        valid = np.isfinite(h) & np.isfinite(m) & (np.abs(h) > 1e-12)
-        h, m, sign = h[valid], m[valid], sign[valid]
-        if len(h) < 5:
-            return float("nan"), float("nan"), n_pos, n_neg
-
-        h_scale = float(np.max(np.abs(h)))
-        if not np.isfinite(h_scale) or h_scale <= 0.0:
-            return float("nan"), float("nan"), n_pos, n_neg
-        x = h / h_scale
-        X = np.column_stack([sign, x, 1.0 / x])
-        try:
-            coeffs, *_ = np.linalg.lstsq(X, m, rcond=None)
-            pred = X @ coeffs
-            ssr = float(np.sum((m - pred) ** 2))
-            sigma2 = ssr / max(len(h) - 3, 1)
-            cov = sigma2 * np.linalg.inv(X.T @ X)
-        except np.linalg.LinAlgError:
-            return float("nan"), float("nan"), n_pos, n_neg
-        return float(coeffs[0]), float(np.sqrt(max(cov[0, 0], 0.0))), n_pos, n_neg
-
     return (
         TEMPERATURE_C,
         TEMPERATURE_K,
@@ -632,7 +588,6 @@ def _(
         half_height_tc_with_sigma,
         local_intercept_at,
         normalize_01_with_sigma,
-        sat_m0_loa_pair,
         sat_intercept_fixed,
         sat_intercept_plateau,
         smooth,
@@ -708,7 +663,6 @@ def _(
     np,
     pd,
     remove_background,
-    sat_m0_loa_pair,
     sat_intercept_fixed,
     sat_intercept_plateau,
     sigma_T_K,
@@ -809,17 +763,6 @@ def _(
         _M_0 = 0.5 * (_bP_pos - _bP_neg)
         _sigma_M_0 = 0.5 * float(np.hypot(_sP_pos, _sP_neg))
 
-        # Law-of-approach cross-check on the same selected tail points:
-        # M = s*M_0 + alpha*H + c/H with s = ±1 for the two saturation
-        # branches. The 1/H term captures the leading non-linearity that
-        # biases a pure linear extrapolation low; the difference M_0 -
-        # M_0_loa is a per-loop method systematic. It is left undefined when
-        # either selected tail has fewer than 8 points, because the extra 1/H
-        # parameter is then underconstrained.
-        _M_0_loa, _sigma_M_0_loa, _, _ = sat_m0_loa_pair(
-            _H_pos, _M_pos_corr, _H_neg, _M_neg_corr,
-        )
-
         # Strict 5-point fit kept as a sensitivity column — this was the
         # previous headline and matches the guide's literal prescription.
         _b_5pt_pos, _s_5pt_pos = sat_intercept_fixed(_H_pos, _M_pos_corr, tail="pos")
@@ -841,8 +784,6 @@ def _(
             "sigma_M_0_A_per_m": _sigma_M_0,
             "M_0_5pt_A_per_m": _M_0_5pt,
             "sigma_M_0_5pt_A_per_m": _sigma_M_0_5pt,
-            "M_0_loa_A_per_m": _M_0_loa,
-            "sigma_M_0_loa_A_per_m": _sigma_M_0_loa,
             "n_tail_pos": int(_nP_pos),
             "n_tail_neg": int(_nP_neg),
         })
@@ -859,13 +800,6 @@ def _(
     summary["M_0_norm"], summary["sigma_M_0_norm"] = normalize_01_with_sigma(
         np.abs(summary["M_0_A_per_m"].to_numpy()),
         summary["sigma_M_0_A_per_m"].to_numpy(),
-    )
-    summary["M_0_loa_norm"], summary["sigma_M_0_loa_norm"] = normalize_01_with_sigma(
-        np.abs(summary["M_0_loa_A_per_m"].to_numpy()),
-        summary["sigma_M_0_loa_A_per_m"].to_numpy(),
-    )
-    summary["M_0_model_shift_A_per_m"] = np.abs(
-        summary["M_0_A_per_m"].to_numpy() - summary["M_0_loa_A_per_m"].to_numpy()
     )
     summary["n_tail_min"] = np.minimum(
         summary["n_tail_pos"].to_numpy(int),
@@ -1058,19 +992,6 @@ def _(
     near-saturation rule $|M|\ge0.95|\hat M_0|$, and the window is grown inward
     only while the fitted high-field slope $\alpha$ remains statistically
     stable. The fixed 5-point result is retained as a sensitivity column.
-
-    As a model-form cross-check on exactly the same selected tail points, the
-    notebook also fits a symmetric leading law-of-approach form
-
-    $$
-    M(H)=sM_0+\alpha H+\frac{{c}}{{H}},\qquad s=\pm1,
-    $$
-
-    and stores the intercept as `M_0_loa_A_per_m`. The difference between the
-    linear and law-of-approach intercepts is reported as a model-shift
-    diagnostic where both selected tails contain at least 8 points; otherwise
-    the law-of-approach diagnostic is left blank. The headline Method III
-    remains the guide's linear extrapolation.
 
     The branches are pre-corrected for the global paramagnetic
     background (fitted in the high-T cell above) before the saturation
@@ -1504,7 +1425,6 @@ def _(Line2D, BREWER, diagnostics, np, plt, save_figure, smooth, summary):
         ("M_r_norm",       "sigma_M_r_norm",       r"$Y(X=0)$",                         BREWER["teal"], "o", "-"),
         ("M_sat_norm",     "sigma_M_sat_norm",     r"$Y(X_{\mathrm{min/max}})$",         BREWER["orange"], "s", "-"),
         ("M_0_norm",       "sigma_M_0_norm",       r"$Y_\mathrm{fit}(X=0)$",             BREWER["purple"], "^", "-"),
-        ("M_0_loa_norm",   "sigma_M_0_loa_norm",   r"$Y_\mathrm{fit}^{1/H}(X=0)$",       BREWER["rose"], "D", "--"),
     ]
 
     legend_handles = []
@@ -1558,7 +1478,6 @@ def _(Line2D, BREWER, diagnostics, np, plt, save_figure, smooth, summary):
     save_figure(fig_methods, "curie_method123_normalized")
     fig_methods
     return
-
 
 @app.cell
 def _(
@@ -1649,7 +1568,6 @@ def _(
     odr_fit,
     pd,
     read_table,
-    sat_m0_loa_pair,
     sat_intercept_fixed,
     sat_intercept_plateau,
     sigma_T_thermometer_K,
@@ -1755,8 +1673,6 @@ def _(
             M0 = 0.5 * (bp - bn)
             sM0 = 0.5 * float(np.hypot(sp, sn))
 
-            M0_loa, sM0_loa, _, _ = sat_m0_loa_pair(Hp, Mp_c, Hn, Mn_c)
-
             bp_5pt, sp_5pt = sat_intercept_fixed(Hp, Mp_c, "pos")
             bn_5pt, sn_5pt = sat_intercept_fixed(Hn, Mn_c, "neg")
             M0_5pt = 0.5 * (bp_5pt - bn_5pt)
@@ -1774,9 +1690,6 @@ def _(
                 "sigma_M_0_A_per_m": float(sM0),
                 "M_0_5pt_A_per_m": float(M0_5pt),
                 "sigma_M_0_5pt_A_per_m": float(sM0_5pt),
-                "M_0_loa_A_per_m": float(M0_loa),
-                "sigma_M_0_loa_A_per_m": float(sM0_loa),
-                "M_0_model_shift_A_per_m": float(abs(M0 - M0_loa)),
                 "n_tail_pos": int(n_pos),
                 "n_tail_neg": int(n_neg),
                 "n_tail_min": int(min(n_pos, n_neg)),
@@ -1794,10 +1707,6 @@ def _(
         run_summary["M_0_norm"], run_summary["sigma_M_0_norm"] = normalize_01_with_sigma(
             np.abs(run_summary["M_0_A_per_m"].to_numpy()),
             run_summary["sigma_M_0_A_per_m"].to_numpy(),
-        )
-        run_summary["M_0_loa_norm"], run_summary["sigma_M_0_loa_norm"] = normalize_01_with_sigma(
-            np.abs(run_summary["M_0_loa_A_per_m"].to_numpy()),
-            run_summary["sigma_M_0_loa_A_per_m"].to_numpy(),
         )
 
         T_used = run_summary["temperature_K"].to_numpy()
@@ -1830,13 +1739,6 @@ def _(
                 "T_retained_min_K": float(T_retained.min()),
                 "T_retained_max_K": float(T_retained.max()),
             })
-
-        tc_M0_loa, sigma_tc_M0_loa = half_height_tc_with_sigma(
-            T_used,
-            sT_used,
-            run_summary["M_0_loa_norm"].to_numpy(),
-            run_summary["sigma_M_0_loa_norm"].to_numpy(),
-        )
 
         finite_method_rows = [
             r for r in method_rows
@@ -1963,9 +1865,6 @@ def _(
                 "sigma_M_sat_norm": float(_record["sigma_M_sat_norm"]),
                 "M_0_norm": float(_record["M_0_norm"]),
                 "sigma_M_0_norm": float(_record["sigma_M_0_norm"]),
-                "M_0_loa_norm": float(_record["M_0_loa_norm"]),
-                "sigma_M_0_loa_norm": float(_record["sigma_M_0_loa_norm"]),
-                "M_0_model_shift_A_per_m": float(_record["M_0_model_shift_A_per_m"]),
                 "n_tail_min": int(_record["n_tail_min"]),
             })
 
@@ -1983,8 +1882,6 @@ def _(
             "sigma_Tc_M_sat_K": _method_by_key.get("M_sat", {}).get("sigma_Tc_K", float("nan")),
             "Tc_M_0_K": _method_by_key.get("M_0", {}).get("Tc_K", float("nan")),
             "sigma_Tc_M_0_K": _method_by_key.get("M_0", {}).get("sigma_Tc_K", float("nan")),
-            "Tc_M_0_loa_K": float(tc_M0_loa),
-            "sigma_Tc_M_0_loa_K": float(sigma_tc_M0_loa),
             "drive_current_A_rms": float(I_rms),
             "H_sat_A_per_m": float(H_sat),
             "H_median_A_per_m": float(np.median(hmax[keep])),
