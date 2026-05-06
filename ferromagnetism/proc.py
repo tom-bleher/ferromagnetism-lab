@@ -430,8 +430,7 @@ def _(BREWER, FIG_DIR, PchipInterpolator, np, plt, pt1):
     _mu_pad = 0.06 * (_mu_hi - _mu_lo)
     axMu.set_ylim(max(0.0, _mu_lo - _mu_pad), _mu_hi + _mu_pad)
 
-    fig.savefig(FIG_DIR / 'fig_BH_mu.pdf', bbox_inches='tight')
-    fig.savefig(FIG_DIR / 'fig_BH_mu.png', bbox_inches='tight', dpi=600)
+    fig.savefig(FIG_DIR / 'fig_BH_mu.pdf', bbox_inches='tight', dpi=600)
     fig
     return
 
@@ -644,8 +643,7 @@ def _(FIG_DIR, RUNS, fits, np, plt):
     ax_res.grid(True, which='major', alpha=0.25)
     ax_res.grid(True, which='minor', alpha=0.10)
 
-    fig2.savefig(FIG_DIR / 'fig_copper_gap.pdf', bbox_inches='tight')
-    fig2.savefig(FIG_DIR / 'fig_copper_gap.png', bbox_inches='tight', dpi=600)
+    fig2.savefig(FIG_DIR / 'fig_copper_gap.pdf', bbox_inches='tight', dpi=600)
     fig2
     return
 
@@ -769,8 +767,7 @@ def _(FIG_DIR, MU0_THEO, RUNS, fits, np, plt):
     _ax_mu0.grid(True, axis="x", which="minor", alpha=0.10)
     _ax_mu0.legend(loc="upper right", fontsize=8)
 
-    _fig_mu0.savefig(FIG_DIR / "fig_mu0_sensitivity.pdf", bbox_inches="tight")
-    _fig_mu0.savefig(FIG_DIR / "fig_mu0_sensitivity.png", bbox_inches="tight", dpi=600)
+    _fig_mu0.savefig(FIG_DIR / "fig_mu0_sensitivity.pdf", bbox_inches="tight", dpi=600)
     _fig_mu0
     return
 

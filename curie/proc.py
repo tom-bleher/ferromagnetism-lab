@@ -178,8 +178,7 @@ def _():
     SIGMA_T_ABS_K = float(sigma_T_thermometer_K(T_TRANSITION_NOMINAL_K))
 
     def save_figure(fig, stem):
-        fig.savefig(FIG_DIR / f"{stem}.pdf", bbox_inches="tight")
-        fig.savefig(FIG_DIR / f"{stem}.png", bbox_inches="tight", dpi=600)
+        fig.savefig(FIG_DIR / f"{stem}.pdf", bbox_inches="tight", dpi=600)
 
     return (
         DATA_FILE,
