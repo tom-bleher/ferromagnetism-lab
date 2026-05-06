@@ -390,18 +390,36 @@ def _(
         # offset that cancels at the half-height crossing anyway.
         y = np.asarray(y, dtype=float)
         sy = np.asarray(sy, dtype=float)
-        shifted = y - float(np.min(y))
-        scale = float(np.max(shifted))
+        finite = np.isfinite(y) & np.isfinite(sy)
+        y_norm = np.full_like(y, np.nan)
+        sy_norm = np.full_like(sy, np.nan)
+        if not finite.any():
+            return y_norm, sy_norm
+        shifted = y - float(np.min(y[finite]))
+        scale = float(np.max(shifted[finite]))
         if scale == 0.0:
             return np.zeros_like(y), np.zeros_like(y)
-        return shifted / scale, sy / scale
+        y_norm[finite] = shifted[finite] / scale
+        sy_norm[finite] = sy[finite] / scale
+        return y_norm, sy_norm
 
     def smooth(y, max_window=21):
         y = np.asarray(y, dtype=float)
+        finite = np.isfinite(y)
+        if finite.sum() < 5:
+            return y
+        if not finite.all():
+            x = np.arange(len(y), dtype=float)
+            y_work = y.copy()
+            y_work[~finite] = np.interp(x[~finite], x[finite], y[finite])
+        else:
+            y_work = y
         window = min(max_window, len(y) if len(y) % 2 == 1 else len(y) - 1)
         if window < 5:
             return y
-        return savgol_filter(y, window_length=window, polyorder=2)
+        y_smooth = savgol_filter(y_work, window_length=window, polyorder=2)
+        y_smooth[~finite] = np.nan
+        return y_smooth
 
     def half_height_tc_with_sigma(T, sT, y, sy):
         # Half-height crossing temperature with local uncertainty from the
@@ -411,6 +429,10 @@ def _(
         y = np.asarray(y, dtype=float)
         sT = np.asarray(sT, dtype=float)
         sy = np.asarray(sy, dtype=float)
+        finite = np.isfinite(T) & np.isfinite(y) & np.isfinite(sT) & np.isfinite(sy)
+        T, y, sT, sy = T[finite], y[finite], sT[finite], sy[finite]
+        if len(T) < 2:
+            return np.nan, np.nan
 
         def _crossing(T_arr, y_arr):
             ys = smooth(y_arr)
@@ -527,7 +549,14 @@ def _(
             # the caller still gets a well-defined fit.
             return Ho[:n_seed], Mo[:n_seed], n_seed
 
-        Hp, Mp = Ho[pool], Mo[pool]
+        # Keep a contiguous outermost-first tail. A later noisy point may
+        # satisfy the 0.95 cut again, but the fit window should not skip over
+        # an earlier non-saturated point.
+        if np.any(~pool):
+            first_bad = int(np.flatnonzero(~pool)[0])
+            Hp, Mp = Ho[:first_bad], Mo[:first_bad]
+        else:
+            Hp, Mp = Ho, Mo
         if len(Hp) < n_min:
             return Ho[:n_seed], Mo[:n_seed], n_seed
 
@@ -535,7 +564,7 @@ def _(
         _, _, prev_alpha, prev_s = _linear_fit(Hp[:n_min], Mp[:n_min])
         for n in range(n_min + 1, len(Hp) + 1):
             _, _, alpha, s_alpha = _linear_fit(Hp[:n], Mp[:n])
-            ref = max(prev_s, s_alpha, 1e-30)
+            ref = max(float(np.hypot(prev_s, s_alpha)), 1e-30)
             if abs(alpha - prev_alpha) > slope_tol_sigma * ref:
                 break
             best_n = n
@@ -554,34 +583,46 @@ def _(
         b, sb = _linear_intercept(h, m)
         return b, sb, n_used
 
-    def _loa_fit(h, m):
-        # Three-parameter law-of-approach fit  M = M_0 + alpha*H + c/H.
-        # The 1/H term absorbs the leading non-linearity that biases a
-        # straight-line extrapolation low. Returns (intercept, sigma_intercept).
-        n = len(h)
-        if n < 4 or float(np.min(np.abs(h))) < 1e-12:
-            return float("nan"), float("nan")
-        X = np.column_stack([np.ones_like(h), h, 1.0 / h])
-        coeffs, *_ = np.linalg.lstsq(X, m, rcond=None)
-        pred = X @ coeffs
-        ssr = float(np.sum((m - pred) ** 2))
-        sigma2 = ssr / max(n - 3, 1)
+    def sat_m0_loa_pair(
+        H_pos, M_pos, H_neg, M_neg,
+        n_min=5, frac=0.95, slope_tol_sigma=1.5, min_points_loa=8,
+    ):
+        # Symmetric law-of-approach fit on both saturation tails together:
+        #     M = s*M_0 + alpha*H + c/H, with s=+1 on the +H upper-branch
+        #     tail and s=-1 on the -H lower-branch tail.
+        # This keeps the same point-selection rule as the linear Method III
+        # but avoids estimating a fragile three-parameter LoA model from each
+        # narrow branch tail independently.
+        hp, mp, n_pos = _select_saturation_window(
+            H_pos, M_pos, "pos", n_min=n_min, frac=frac, slope_tol_sigma=slope_tol_sigma,
+        )
+        hn, mn, n_neg = _select_saturation_window(
+            H_neg, M_neg, "neg", n_min=n_min, frac=frac, slope_tol_sigma=slope_tol_sigma,
+        )
+        if min(n_pos, n_neg) < min_points_loa:
+            return float("nan"), float("nan"), n_pos, n_neg
+        h = np.concatenate([hp, hn])
+        m = np.concatenate([mp, mn])
+        sign = np.concatenate([np.ones_like(hp), -np.ones_like(hn)])
+        valid = np.isfinite(h) & np.isfinite(m) & (np.abs(h) > 1e-12)
+        h, m, sign = h[valid], m[valid], sign[valid]
+        if len(h) < 5:
+            return float("nan"), float("nan"), n_pos, n_neg
+
+        h_scale = float(np.max(np.abs(h)))
+        if not np.isfinite(h_scale) or h_scale <= 0.0:
+            return float("nan"), float("nan"), n_pos, n_neg
+        x = h / h_scale
+        X = np.column_stack([sign, x, 1.0 / x])
         try:
+            coeffs, *_ = np.linalg.lstsq(X, m, rcond=None)
+            pred = X @ coeffs
+            ssr = float(np.sum((m - pred) ** 2))
+            sigma2 = ssr / max(len(h) - 3, 1)
             cov = sigma2 * np.linalg.inv(X.T @ X)
         except np.linalg.LinAlgError:
-            return float("nan"), float("nan")
-        return float(coeffs[0]), float(np.sqrt(max(cov[0, 0], 0.0)))
-
-    def sat_intercept_loa(H, M, tail, n_min=5, frac=0.95, slope_tol_sigma=1.5):
-        # Saturation-tail fit using the law-of-approach form, on the same
-        # window selected by sat_intercept_plateau. Sharing the window makes
-        # the difference between this estimator and the linear one a pure
-        # model-form effect, suitable as a per-loop method systematic on M_0.
-        h, m, n_used = _select_saturation_window(
-            H, M, tail, n_min=n_min, frac=frac, slope_tol_sigma=slope_tol_sigma,
-        )
-        b, sb = _loa_fit(h, m)
-        return b, sb, n_used
+            return float("nan"), float("nan"), n_pos, n_neg
+        return float(coeffs[0]), float(np.sqrt(max(cov[0, 0], 0.0))), n_pos, n_neg
 
     return (
         TEMPERATURE_C,
@@ -591,8 +632,8 @@ def _(
         half_height_tc_with_sigma,
         local_intercept_at,
         normalize_01_with_sigma,
+        sat_m0_loa_pair,
         sat_intercept_fixed,
-        sat_intercept_loa,
         sat_intercept_plateau,
         smooth,
         transition_diagnostics,
@@ -667,8 +708,8 @@ def _(
     np,
     pd,
     remove_background,
+    sat_m0_loa_pair,
     sat_intercept_fixed,
-    sat_intercept_loa,
     sat_intercept_plateau,
     sigma_T_K,
     transition_diagnostics,
@@ -768,14 +809,16 @@ def _(
         _M_0 = 0.5 * (_bP_pos - _bP_neg)
         _sigma_M_0 = 0.5 * float(np.hypot(_sP_pos, _sP_neg))
 
-        # Law-of-approach cross-check on the same window: M = M_0 + alpha*H
-        # + c/H. The 1/H term captures the leading non-linearity that biases
-        # a pure linear extrapolation low; the difference M_0 - M_0_loa is
-        # a per-loop method systematic.
-        _bL_pos, _sL_pos, _ = sat_intercept_loa(_H_pos, _M_pos_corr, tail="pos")
-        _bL_neg, _sL_neg, _ = sat_intercept_loa(_H_neg, _M_neg_corr, tail="neg")
-        _M_0_loa = 0.5 * (_bL_pos - _bL_neg)
-        _sigma_M_0_loa = 0.5 * float(np.hypot(_sL_pos, _sL_neg))
+        # Law-of-approach cross-check on the same selected tail points:
+        # M = s*M_0 + alpha*H + c/H with s = ±1 for the two saturation
+        # branches. The 1/H term captures the leading non-linearity that
+        # biases a pure linear extrapolation low; the difference M_0 -
+        # M_0_loa is a per-loop method systematic. It is left undefined when
+        # either selected tail has fewer than 8 points, because the extra 1/H
+        # parameter is then underconstrained.
+        _M_0_loa, _sigma_M_0_loa, _, _ = sat_m0_loa_pair(
+            _H_pos, _M_pos_corr, _H_neg, _M_neg_corr,
+        )
 
         # Strict 5-point fit kept as a sensitivity column — this was the
         # previous headline and matches the guide's literal prescription.
@@ -816,6 +859,17 @@ def _(
     summary["M_0_norm"], summary["sigma_M_0_norm"] = normalize_01_with_sigma(
         np.abs(summary["M_0_A_per_m"].to_numpy()),
         summary["sigma_M_0_A_per_m"].to_numpy(),
+    )
+    summary["M_0_loa_norm"], summary["sigma_M_0_loa_norm"] = normalize_01_with_sigma(
+        np.abs(summary["M_0_loa_A_per_m"].to_numpy()),
+        summary["sigma_M_0_loa_A_per_m"].to_numpy(),
+    )
+    summary["M_0_model_shift_A_per_m"] = np.abs(
+        summary["M_0_A_per_m"].to_numpy() - summary["M_0_loa_A_per_m"].to_numpy()
+    )
+    summary["n_tail_min"] = np.minimum(
+        summary["n_tail_pos"].to_numpy(int),
+        summary["n_tail_neg"].to_numpy(int),
     )
     summary["M_0_snr"] = np.abs(summary["M_0_A_per_m"].to_numpy()) / np.maximum(
         summary["sigma_M_0_A_per_m"].to_numpy(), 1e-30,
@@ -997,12 +1051,26 @@ def _(
     extrapolation* (Method III). The fitted slope $\alpha=\chi_\mathrm{{HF}}$
     is the high-field susceptibility (the guide's $\alpha$).
 
-    The primary Method-III value uses the instructor's fixed 5-point
-    saturated-tail fit, ranked by tail-side $|H|$. The LabVIEW export stores
-    the $H\ge0$ half of the upper branch and the $H\le0$ half of the lower
-    branch, so each loop contributes two saturated tips. Statistical
-    uncertainty on $M_0$ is propagated in quadrature from the two per-fit
-    intercept sigmas.
+    The primary Method-III value keeps the guide's **linear** saturation-tail
+    extrapolation, but the fit window is selected from the data rather than by
+    blindly taking the last few points. A strict 5-point linear fit seeds
+    $M_0$; the candidate tail is then restricted to points satisfying the
+    near-saturation rule $|M|\ge0.95|\hat M_0|$, and the window is grown inward
+    only while the fitted high-field slope $\alpha$ remains statistically
+    stable. The fixed 5-point result is retained as a sensitivity column.
+
+    As a model-form cross-check on exactly the same selected tail points, the
+    notebook also fits a symmetric leading law-of-approach form
+
+    $$
+    M(H)=sM_0+\alpha H+\frac{{c}}{{H}},\qquad s=\pm1,
+    $$
+
+    and stores the intercept as `M_0_loa_A_per_m`. The difference between the
+    linear and law-of-approach intercepts is reported as a model-shift
+    diagnostic where both selected tails contain at least 8 points; otherwise
+    the law-of-approach diagnostic is left blank. The headline Method III
+    remains the guide's linear extrapolation.
 
     The branches are pre-corrected for the global paramagnetic
     background (fitted in the high-T cell above) before the saturation
@@ -1433,13 +1501,14 @@ def _(Line2D, BREWER, diagnostics, np, plt, save_figure, smooth, summary):
     temperature = summary["temperature_K"].to_numpy()
     sigma_T_arr = summary["sigma_T_K"].to_numpy()
     series = [
-        ("M_r_norm",    "sigma_M_r_norm",    r"$Y(X=0)$",                         BREWER["teal"], "o"),
-        ("M_sat_norm",  "sigma_M_sat_norm",  r"$Y(X_{\mathrm{min/max}})$",         BREWER["orange"], "s"),
-        ("M_0_norm",    "sigma_M_0_norm",    r"$Y_\mathrm{fit}(X=0)$",             BREWER["purple"], "^"),
+        ("M_r_norm",       "sigma_M_r_norm",       r"$Y(X=0)$",                         BREWER["teal"], "o", "-"),
+        ("M_sat_norm",     "sigma_M_sat_norm",     r"$Y(X_{\mathrm{min/max}})$",         BREWER["orange"], "s", "-"),
+        ("M_0_norm",       "sigma_M_0_norm",       r"$Y_\mathrm{fit}(X=0)$",             BREWER["purple"], "^", "-"),
+        ("M_0_loa_norm",   "sigma_M_0_loa_norm",   r"$Y_\mathrm{fit}^{1/H}(X=0)$",       BREWER["rose"], "D", "--"),
     ]
 
     legend_handles = []
-    for _column, _scolumn, _label, _color, _marker in series:
+    for _column, _scolumn, _label, _color, _marker, _linestyle in series:
         _values = summary[_column].to_numpy()
         _svalues = summary[_scolumn].to_numpy() if _scolumn in summary.columns else np.zeros_like(_values)
         ax_methods.errorbar(
@@ -1453,12 +1522,12 @@ def _(Line2D, BREWER, diagnostics, np, plt, save_figure, smooth, summary):
             color=_color,
             ecolor=_color,
             elinewidth=0.5,
-            alpha=0.7,
+            alpha=0.55 if _linestyle == "--" else 0.7,
         )
-        ax_methods.plot(temperature, smooth(_values), color=_color, linewidth=2.1)
-        legend_handles.append(Line2D([0], [0], color=_color, linewidth=2.1, label=_label))
+        ax_methods.plot(temperature, smooth(_values), color=_color, linewidth=2.1, linestyle=_linestyle)
+        legend_handles.append(Line2D([0], [0], color=_color, linewidth=2.1, linestyle=_linestyle, label=_label))
 
-    for (_, _row), (_, _, _, _color, _) in zip(diagnostics.iterrows(), series):
+    for (_, _row), (_, _, _, _color, _, _) in zip(diagnostics.iterrows(), series):
         ax_methods.axvline(_row["half_height_K"], color=_color, linestyle="--", linewidth=1.0, alpha=0.65)
 
     steepest_temperatures = np.unique(np.round(diagnostics["steepest_slope_K"].to_numpy(float)[: len(series)], 2))
@@ -1580,6 +1649,9 @@ def _(
     odr_fit,
     pd,
     read_table,
+    sat_m0_loa_pair,
+    sat_intercept_fixed,
+    sat_intercept_plateau,
     sigma_T_thermometer_K,
 ):
     # Cross-run check: re-run the same three half-height estimators on all
@@ -1608,15 +1680,6 @@ def _(
         B_p = _B_per_Y * row[yp].to_numpy(float)
         B_n = _B_per_Y * row[yn].to_numpy(float)
         return H_p, B_p / MU0 - H_p, H_n, B_n / MU0 - H_n
-
-    def _tail_intercept(H, M, tail, n=5):
-        # Mirrors the main pipeline's primary Method III: the guide's strict
-        # five tail-side points, avoiding expansion into the shoulder.
-        order = np.argsort(-H) if tail == "pos" else np.argsort(H)
-        h, m = H[order], M[order]
-        co, cov = np.polyfit(h[:n], m[:n], 1, cov=True)
-        b, sb = float(co[1]), float(np.sqrt(cov[1, 1]))
-        return b, sb
 
     def _run_methods(label, path):
         df = pd.read_csv(path, sep="\t")
@@ -1687,10 +1750,17 @@ def _(
             M_sat = 0.5 * abs(Mp_sat - Mn_sat)
             sM_sat = 0.5 * float(np.hypot(sp_sat, sn_sat))
 
-            bp, sp = _tail_intercept(Hp, Mp_c, "pos")
-            bn, sn = _tail_intercept(Hn, Mn_c, "neg")
+            bp, sp, n_pos = sat_intercept_plateau(Hp, Mp_c, "pos")
+            bn, sn, n_neg = sat_intercept_plateau(Hn, Mn_c, "neg")
             M0 = 0.5 * (bp - bn)
             sM0 = 0.5 * float(np.hypot(sp, sn))
+
+            M0_loa, sM0_loa, _, _ = sat_m0_loa_pair(Hp, Mp_c, Hn, Mn_c)
+
+            bp_5pt, sp_5pt = sat_intercept_fixed(Hp, Mp_c, "pos")
+            bn_5pt, sn_5pt = sat_intercept_fixed(Hn, Mn_c, "neg")
+            M0_5pt = 0.5 * (bp_5pt - bn_5pt)
+            sM0_5pt = 0.5 * float(np.hypot(sp_5pt, sn_5pt))
 
             records.append({
                 "temperature_K": float(T_K[i]),
@@ -1702,6 +1772,14 @@ def _(
                 "sigma_M_sat_A_per_m": float(sM_sat),
                 "M_0_A_per_m": float(M0),
                 "sigma_M_0_A_per_m": float(sM0),
+                "M_0_5pt_A_per_m": float(M0_5pt),
+                "sigma_M_0_5pt_A_per_m": float(sM0_5pt),
+                "M_0_loa_A_per_m": float(M0_loa),
+                "sigma_M_0_loa_A_per_m": float(sM0_loa),
+                "M_0_model_shift_A_per_m": float(abs(M0 - M0_loa)),
+                "n_tail_pos": int(n_pos),
+                "n_tail_neg": int(n_neg),
+                "n_tail_min": int(min(n_pos, n_neg)),
             })
 
         run_summary = pd.DataFrame.from_records(records)
@@ -1716,6 +1794,10 @@ def _(
         run_summary["M_0_norm"], run_summary["sigma_M_0_norm"] = normalize_01_with_sigma(
             np.abs(run_summary["M_0_A_per_m"].to_numpy()),
             run_summary["sigma_M_0_A_per_m"].to_numpy(),
+        )
+        run_summary["M_0_loa_norm"], run_summary["sigma_M_0_loa_norm"] = normalize_01_with_sigma(
+            np.abs(run_summary["M_0_loa_A_per_m"].to_numpy()),
+            run_summary["sigma_M_0_loa_A_per_m"].to_numpy(),
         )
 
         T_used = run_summary["temperature_K"].to_numpy()
@@ -1748,6 +1830,13 @@ def _(
                 "T_retained_min_K": float(T_retained.min()),
                 "T_retained_max_K": float(T_retained.max()),
             })
+
+        tc_M0_loa, sigma_tc_M0_loa = half_height_tc_with_sigma(
+            T_used,
+            sT_used,
+            run_summary["M_0_loa_norm"].to_numpy(),
+            run_summary["sigma_M_0_loa_norm"].to_numpy(),
+        )
 
         finite_method_rows = [
             r for r in method_rows
@@ -1874,6 +1963,10 @@ def _(
                 "sigma_M_sat_norm": float(_record["sigma_M_sat_norm"]),
                 "M_0_norm": float(_record["M_0_norm"]),
                 "sigma_M_0_norm": float(_record["sigma_M_0_norm"]),
+                "M_0_loa_norm": float(_record["M_0_loa_norm"]),
+                "sigma_M_0_loa_norm": float(_record["sigma_M_0_loa_norm"]),
+                "M_0_model_shift_A_per_m": float(_record["M_0_model_shift_A_per_m"]),
+                "n_tail_min": int(_record["n_tail_min"]),
             })
 
         return {
@@ -1890,6 +1983,8 @@ def _(
             "sigma_Tc_M_sat_K": _method_by_key.get("M_sat", {}).get("sigma_Tc_K", float("nan")),
             "Tc_M_0_K": _method_by_key.get("M_0", {}).get("Tc_K", float("nan")),
             "sigma_Tc_M_0_K": _method_by_key.get("M_0", {}).get("sigma_Tc_K", float("nan")),
+            "Tc_M_0_loa_K": float(tc_M0_loa),
+            "sigma_Tc_M_0_loa_K": float(sigma_tc_M0_loa),
             "drive_current_A_rms": float(I_rms),
             "H_sat_A_per_m": float(H_sat),
             "H_median_A_per_m": float(np.median(hmax[keep])),
