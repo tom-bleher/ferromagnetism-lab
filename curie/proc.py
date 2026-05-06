@@ -38,8 +38,8 @@ def _(mo):
            trace $V_y(V_x{=}V_{x,\max})$.
         3. **Method III** — $M_0(T)$, the same single loop's saturation
            tail fitted linearly and *extrapolated back to $H=0$*. This
-           is the guide's algebraic Method III ("$B-(\alpha+1)H=M_0$");
-           the spontaneous magnetization.
+           is the guide's algebraic Method III, written in SI as
+           "$B/\mu_0-(\alpha+1)H=M_0$"; the spontaneous magnetization.
     - chain Method III into a weighted mean-field fit
       $M_0^2(T)\propto T_c-T$ to extract $T_c\pm\sigma_{T_c}$.
 
@@ -147,7 +147,7 @@ def _():
 
     MU0 = 1.25663706127e-6
     FIELD_READY_FRACTION = 0.98
-    TARGET_LOOP_TEMPERATURES_K = [180, 195, 210, 225, 240, 260, 278]
+    TARGET_LOOP_TEMPERATURES_K = [180, 195, 210, 225, 240]
 
     # Adaptive bound on the absolute thermometer accuracy. The bench
     # instrument is a CHY 508BR (K/J/T/E/S thermometer); CHY does not
@@ -717,7 +717,7 @@ def _(
         _M_sat = 0.5 * abs(_M_pos_sat - _M_neg_sat)
         _sigma_M_sat = 0.5 * float(np.hypot(_s_pos_sat, _s_neg_sat))
 
-        # Method III: M_0(T) ≡ ½ |M_+^sat(T) − M_-^sat(T)|, where
+        # Method III: M_0(T) ≡ ½ (b_+ − b_-), where
         # M_±^sat(T) is the linear-fit extrapolation of the ± branch's
         # saturated tail back to H=0 — i.e. the y-intercept b_± of the
         # linear fit, equal to ±M_0 by symmetry.
@@ -972,17 +972,18 @@ def _(
     loop, so the proxy is
 
     $$
-    M_0(T)\;\equiv\;\tfrac12\,\bigl|\,b_+(T)-b_-(T)\,\bigr|.
+    M_0(T)\;\equiv\;\tfrac12\,\bigl[b_+(T)-b_-(T)\bigr].
     $$
 
     The intercepts $b_\pm$ are *not* two independent measurements; they
     are two algebraic intercepts of two linear fits applied to two
     different ends of the *same* hysteresis loop. This makes the
-    parallel structure with Methods I and II explicit: all three are
-    $\tfrac12|M_+(T,H_\text{{eval}})-M_-(T,H_\text{{eval}})|$ with
-    $H_\text{{eval}}=0$ (Method I), $H_\text{{eval}}=\pm H_\mathrm{{sat}}$
-    (Method II), or $H_\text{{eval}}=0$ *via the saturation-fit
-    extrapolation* (Method III). The fitted slope $\alpha=\chi_\mathrm{{HF}}$
+    parallel structure with Methods I and II explicit: all three use the
+    half-difference between the upper and lower branches of the same loop.
+    Methods I and II take direct branch reads at $H_\text{{eval}}=0$ and
+    $H_\text{{eval}}=\pm H_\mathrm{{sat}}$ respectively, while Method III
+    uses the signed half-difference of the two saturation-tail intercepts
+    extrapolated to $H=0$. The fitted slope $\alpha=\chi_\mathrm{{HF}}$
     is the high-field susceptibility (the guide's $\alpha$).
 
     The primary Method-III value keeps the guide's **linear** saturation-tail
@@ -1360,13 +1361,17 @@ def _(
 
 @app.cell
 def _(
-    Normalize,
+    B_PER_Y,
+    BREWER,
+    DATA_FILE,
+    H_PER_X,
+    MU0,
     TARGET_LOOP_TEMPERATURES_K,
     TEMPERATURE_K,
-    branches_for_row,
     data,
     field_ready_temperature_K,
     np,
+    pd,
     plt,
     remove_background,
     save_figure,
@@ -1379,21 +1384,35 @@ def _(
     selected_indices = sorted(set(selected_indices), key=lambda i: TEMPERATURE_K[i])
 
     loop_temperatures = TEMPERATURE_K[selected_indices]
-    cmap = plt.colormaps["YlGnBu"]
-    norm = Normalize(vmin=float(loop_temperatures.min()), vmax=float(loop_temperatures.max()))
+    palette = [
+        BREWER["teal"],
+        BREWER["orange"],
+        BREWER["purple"],
+        BREWER["green"],
+        BREWER["rose"],
+    ]
+
+    def _loop_temperature_from_path(path):
+        temp_label = path.stem.removeprefix("HystLoop_").removesuffix("C")
+        return float(temp_label.replace("m", "-"))
+
+    loop_files = sorted(DATA_FILE.parent.glob("HystLoop_*.txt"))
+    loop_temperatures_C = np.array([_loop_temperature_from_path(path) for path in loop_files])
 
     fig_loops, ax_loops = plt.subplots(figsize=(7.2, 4.4), constrained_layout=True)
     max_abs_h = 0.0
-    for _i in selected_indices:
-        _row = data.iloc[_i]
-        _H_pos, _M_pos, _H_neg, _M_neg = branches_for_row(_row)
-        _M_pos_corr = remove_background(_H_pos, _M_pos) / 1e3
-        _M_neg_corr = remove_background(_H_neg, _M_neg) / 1e3
-        _color = cmap(norm(TEMPERATURE_K[_i]))
+    for _j, _i in enumerate(selected_indices):
+        _temperature_C = float(data["Temperature (C)"].iloc[_i])
+        _loop_path = loop_files[int(np.argmin(np.abs(loop_temperatures_C - _temperature_C)))]
+        _loop = pd.read_csv(_loop_path, sep="\t")
+        _H = H_PER_X * _loop["X (Volt)"].to_numpy(float)
+        _B = B_PER_Y * _loop["Y (Volt)"].to_numpy(float)
+        _M_corr = remove_background(_H, _B / MU0 - _H) / 1e3
+        _color = palette[_j % len(palette)]
+        _label = rf"${TEMPERATURE_K[_i]:.0f}\,\mathrm{{K}}$"
 
-        ax_loops.plot(_H_pos, _M_pos_corr, color=_color, linewidth=1.8)
-        ax_loops.plot(_H_neg, _M_neg_corr, color=_color, linewidth=1.8)
-        _loop_hmax = float(np.max(np.abs(np.concatenate([_H_pos, _H_neg]))))
+        ax_loops.plot(_H, _M_corr, color=_color, linewidth=1.65, label=_label)
+        _loop_hmax = float(np.max(np.abs(_H)))
         max_abs_h = max(max_abs_h, _loop_hmax)
 
     ax_loops.axhline(0, color="0.25", linewidth=0.8)
@@ -1404,11 +1423,7 @@ def _(
     ax_loops.minorticks_on()
     ax_loops.grid(True, which="major", alpha=0.25)
     ax_loops.grid(True, which="minor", alpha=0.10)
-
-    sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
-    sm.set_array([])
-    colorbar = fig_loops.colorbar(sm, ax=ax_loops, pad=0.02)
-    colorbar.set_label(r"$T$ (K)")
+    ax_loops.legend(title=r"$T$", loc="upper left", framealpha=0.95)
 
     save_figure(fig_loops, "curie_selected_loops")
     fig_loops
@@ -1925,6 +1940,111 @@ def _(FIG_DIR, cross_run, run_curves, run_method_tcs):
     run_curves.to_csv(FIG_DIR / "curie_run_curves.csv", index=False)
     run_method_tcs.to_csv(FIG_DIR / "curie_run_method_tcs.csv", index=False)
     cross_run.to_csv(FIG_DIR / "curie_cross_run_summary.csv", index=False)
+    return
+
+
+@app.cell
+def _(BREWER, RUN_FILES, cross_run, np, pd, plt, save_figure):
+    _run_order = ["first", "second", "third"]
+    _run_labels = {"first": "Run 1", "second": "Run 2", "third": "Run 3"}
+    _colors = {
+        "first": BREWER["teal"],
+        "second": BREWER["orange"],
+        "third": BREWER["purple"],
+    }
+
+    _fig_cov, (_ax_time, _ax_range) = plt.subplots(
+        2, 1,
+        figsize=(7.4, 5.6),
+        constrained_layout=True,
+        gridspec_kw={"height_ratios": [1.45, 1.0]},
+    )
+
+    _all_T = []
+    for _run in _run_order:
+        _path = RUN_FILES[_run]
+        _df = pd.read_csv(_path, sep="\t")
+        _time_min = _df["Time (sec)"].to_numpy(float) / 60.0
+        _T = _df["Temperature (C)"].to_numpy(float) + 273.15
+        _all_T.append(_T)
+
+        _row = cross_run.loc[cross_run["run"] == _run]
+        _label = _run_labels[_run]
+        if not _row.empty:
+            _row = _row.iloc[0]
+            _label = (
+                rf"{_label}: $I={_row['drive_current_A_rms']:.2f}\,$A, "
+                rf"$H/H_1={_row['drive_fraction_vs_first']:.2f}$"
+            )
+        _ax_time.plot(
+            _time_min, _T,
+            color=_colors[_run], linewidth=1.45, alpha=0.9,
+            label=_label,
+        )
+
+        if not cross_run.loc[cross_run["run"] == _run].empty:
+            _ret_min = float(cross_run.loc[cross_run["run"] == _run, "T_retained_min_K"].iloc[0])
+            _ready_idx = int(np.argmin(np.abs(_T - _ret_min)))
+            _ax_time.scatter(
+                _time_min[_ready_idx], _T[_ready_idx],
+                s=28, marker="o", color=_colors[_run], edgecolor="white",
+                linewidth=0.6, zorder=3,
+            )
+
+    _ax_time.set_xlabel(r"$t$ (min)")
+    _ax_time.set_ylabel(r"$T$ (K)")
+    _ax_time.minorticks_on()
+    _ax_time.grid(True, which="major", alpha=0.24)
+    _ax_time.grid(True, which="minor", alpha=0.10)
+    _ax_time.legend(loc="lower right", fontsize=7.6, framealpha=0.95)
+
+    _y_positions = np.arange(len(_run_order))[::-1]
+    for _y, _run in zip(_y_positions, _run_order):
+        _row = cross_run.loc[cross_run["run"] == _run]
+        if _row.empty:
+            continue
+        _row = _row.iloc[0]
+        _color = _colors[_run]
+        _ax_range.plot(
+            [_row["T_min_K"], _row["T_max_K"]], [_y, _y],
+            color="0.75", linewidth=6.0, solid_capstyle="round",
+            label="logged range" if _y == _y_positions[0] else None,
+        )
+        _ax_range.plot(
+            [_row["T_retained_min_K"], _row["T_retained_max_K"]], [_y, _y],
+            color=_color, linewidth=7.5, solid_capstyle="round",
+            label="retained range" if _y == _y_positions[0] else None,
+        )
+        if np.isfinite(_row["Tc_K_methods_mean"]):
+            _ax_range.errorbar(
+                _row["Tc_K_methods_mean"], _y,
+                xerr=_row["sigma_Tc_K_methods_stat"],
+                fmt="o", color=_color, ecolor=_color, mfc="white",
+                capsize=2.5, markersize=4.5,
+                label=r"method mean $T_{1/2}$" if _y == _y_positions[0] else None,
+            )
+        _ax_range.text(
+            _row["T_max_K"] + 4.0, _y,
+            rf"$N={int(_row['n_loops'])}$",
+            va="center", ha="left", fontsize=8, color="0.25",
+        )
+
+    _T_all = np.concatenate(_all_T) if _all_T else np.array([180.0, 280.0])
+    _ax_range.set_xlim(float(np.nanmin(_T_all)) - 5.0, float(np.nanmax(_T_all)) + 22.0)
+    _ax_range.set_ylim(-0.55, len(_run_order) - 0.45)
+    _ax_range.set_yticks(_y_positions, [_run_labels[_r] for _r in _run_order])
+    _ax_range.set_xlabel(r"$T$ (K)")
+    _ax_range.set_ylabel("run")
+    _ax_range.minorticks_on()
+    _ax_range.grid(True, axis="x", which="major", alpha=0.24)
+    _ax_range.grid(True, axis="x", which="minor", alpha=0.10)
+    _ax_range.legend(
+        loc="upper center", bbox_to_anchor=(0.5, -0.28),
+        ncol=3, fontsize=7.8, framealpha=0.95,
+    )
+
+    save_figure(_fig_cov, "curie_run_coverage")
+    _fig_cov
     return
 
 
