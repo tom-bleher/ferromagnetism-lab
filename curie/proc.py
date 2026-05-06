@@ -149,12 +149,34 @@ def _():
     FIELD_READY_FRACTION = 0.98
     TARGET_LOOP_TEMPERATURES_K = [180, 195, 210, 225, 240, 260, 278]
 
-    # Conservative bound on the absolute thermometer accuracy (datasheet
-    # not in hand; ±1 K is typical for K-type thermocouples used with a
-    # cryogenic Monel sample). This is fully correlated across all loops
-    # in a run, so it is reported as a separate systematic and not folded
-    # into the per-loop sigma_T used for fit weights.
-    SIGMA_T_ABS_K = 1.0
+    # Adaptive bound on the absolute thermometer accuracy. The bench
+    # instrument is a CHY 508BR (K/J/T/E/S thermometer); CHY does not
+    # publish a standalone 508BR manual but the 508BR-specific accuracy
+    # is printed on the back of the unit (photo:
+    # references/instrument-manuals/thermocouple_508br_label.jpg):
+    #     ±(0.1% rdg + 1 °C) on -60 °C to 1372 °C
+    #     ±(0.1% rdg + 2 °C) on -60 °C to -220 °C
+    # Following the Part 1 convention, only manufacturer specs from the
+    # actual instrument's documentation are propagated; the probe-wire
+    # tolerance is not (it would have to be inferred from the 502A
+    # sister-model manual + IEC 60584-2 Class 2 K-type, neither of which
+    # documents this specific 508BR's probe). This is fully correlated
+    # across loops in a run, so it is reported as a separate systematic
+    # and not folded into the per-loop sigma_T used for fit weights.
+    # The headline scalar is evaluated at the transition (T_c ≈ 215 K
+    # = -58 °C, in the warm-range branch).
+    def sigma_T_thermometer_K(T_K):
+        """508BR meter accuracy, in K, evaluated at T_K (device-label spec)."""
+        T_C = np.asarray(T_K, dtype=float) - 273.15
+        absT_C = np.abs(T_C)
+        return np.where(
+            T_C >= -60.0,
+            0.001 * absT_C + 1.0,   # warm range: ±(0.1% rdg + 1 °C)
+            0.001 * absT_C + 2.0,   # cold range: ±(0.1% rdg + 2 °C)
+        )
+
+    T_TRANSITION_NOMINAL_K = 215.0  # bench knowledge of Monel transition
+    SIGMA_T_ABS_K = float(sigma_T_thermometer_K(T_TRANSITION_NOMINAL_K))
 
     def save_figure(fig, stem):
         fig.savefig(FIG_DIR / f"{stem}.pdf", bbox_inches="tight")
@@ -171,7 +193,9 @@ def _():
         BREWER,
         RUN_FILES,
         SIGMA_T_ABS_K,
+        T_TRANSITION_NOMINAL_K,
         TARGET_LOOP_TEMPERATURES_K,
+        sigma_T_thermometer_K,
         fit_functions,
         np,
         odr_fit,
@@ -184,7 +208,7 @@ def _():
 
 
 @app.cell
-def _(DATA_FILE, DATA_XLSX, mo, np, pd, read_table):
+def _(DATA_FILE, DATA_XLSX, SIGMA_T_ABS_K, T_TRANSITION_NOMINAL_K, mo, np, pd, read_table, sigma_T_thermometer_K):
     data = pd.read_csv(DATA_FILE, sep="\t")
     apparatus = read_table(DATA_XLSX, sheet_name="apparatus").iloc[0]
     temperature_K = data["Temperature (C)"] + 273.15
@@ -247,6 +271,12 @@ def _(DATA_FILE, DATA_XLSX, mo, np, pd, read_table):
     _T_resolution = 1e-3
     sigma_T_K = np.sqrt(sigma_T_smear**2 + (_T_resolution / np.sqrt(12.0)) ** 2)
 
+    # Adaptive 508BR thermometer absolute bound across the actual T range
+    # for diagnostic display only; this is a fully-correlated systematic
+    # that shifts T_c rigidly, so it is *not* added to sigma_T_K (which
+    # is used as fit weights for the per-loop crossing).
+    _sigma_T_therm_per_loop = sigma_T_thermometer_K(_T_K)
+
     # Integrator-validity check for the Curie circuit. Same logic as the
     # ferromagnetism notebook: the R_y-C circuit is an ideal integrator
     # only in the limit omega*R_y*C >> 1; check the actual gain ratio
@@ -266,6 +296,7 @@ def _(DATA_FILE, DATA_XLSX, mo, np, pd, read_table):
     - temperature range: `{temperature_K.min():.3f}` to `{temperature_K.max():.3f}` K
     - calibration constants: `H/Vx = {H_PER_X:.6g} A m^-1 V^-1`, `B/Vy = {B_PER_Y:.6g} T V^-1`
     - loop window: `{_dt_loop:.2f}` s; per-loop $\sigma_T$ over the raw run (median, p95): `{np.median(sigma_T_K):.3f}`, `{np.percentile(sigma_T_K, 95):.3f}` K
+    - 508BR thermometer absolute bound across this run (min, median, max): `{np.min(_sigma_T_therm_per_loop):.2f}`, `{np.median(_sigma_T_therm_per_loop):.2f}`, `{np.max(_sigma_T_therm_per_loop):.2f}` K; headline at $T_c\approx{T_TRANSITION_NOMINAL_K:.0f}$ K is $\sigma_\text{{therm}}={SIGMA_T_ABS_K:.2f}$ K (see dedicated cell below for the formula).
 
     The Curie circuit constants are set to match the lab schematic
     ($N_1=250$ primary, $N_2=2500$ secondary, $R_y=3.97\,\mathrm{{k\Omega}}$,
