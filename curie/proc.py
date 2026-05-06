@@ -78,11 +78,24 @@ def _():
     import numpy as np
     import pandas as pd
     import matplotlib.pyplot as plt
+    from cycler import cycler
     from matplotlib.colors import Normalize
     from matplotlib.lines import Line2D
     from scipy.signal import savgol_filter
 
     from taulab import fit_functions, odr_fit, read_table
+
+    # ColorBrewer Dark2: muted, high-contrast colours suitable for print.
+    BREWER = {
+        "teal": "#1b9e77",
+        "orange": "#d95f02",
+        "purple": "#7570b3",
+        "rose": "#e7298a",
+        "green": "#66a61e",
+        "gold": "#e6ab02",
+        "brown": "#a6761d",
+        "gray": "#666666",
+    }
 
     plt.rcParams.update({
         "figure.figsize": (7.2, 4.5),
@@ -91,6 +104,16 @@ def _():
         "font.size": 9,
         "font.family": "DejaVu Sans",
         "mathtext.fontset": "cm",
+        "axes.prop_cycle": cycler(color=[
+            BREWER["teal"],
+            BREWER["orange"],
+            BREWER["purple"],
+            BREWER["green"],
+            BREWER["rose"],
+            BREWER["gold"],
+            BREWER["brown"],
+            BREWER["gray"],
+        ]),
         "axes.titlesize": 11,
         "axes.labelsize": 10,
         "axes.grid": True,
@@ -145,6 +168,7 @@ def _():
         Line2D,
         MU0,
         Normalize,
+        BREWER,
         RUN_FILES,
         SIGMA_T_ABS_K,
         TARGET_LOOP_TEMPERATURES_K,
@@ -857,7 +881,8 @@ def _(
 
     {table_md(diag, ["method", "half_height_K", "steepest_slope_K", "steepest_slope_value"])}
 
-    **Half-height $T_{{1/2}}^\mathrm{{app}}$ with local uncertainty** for all three methods. Each row is the half-height crossing temperature; the
+    **Half-height $T_{{1/2}}^\mathrm{{app}}$ with local uncertainty** for all three
+    methods. Each row is the half-height crossing temperature; the
     local uncertainty uses the temperature smearing and the scatter of
     the per-loop fit. Method III also feeds the linear $M_0^2(T)$
     check below.
@@ -1060,6 +1085,7 @@ def _(K_best, Tc_C, Tc_K, mo, odr_result, sigma_Tc_K):
 def _(
     K_best,
     M0_sq_all,
+    BREWER,
     T_all,
     Tc_K,
     Tc_headline,
@@ -1074,6 +1100,10 @@ def _(
     sigma_Tc_K,
     sigma_Tc_headline_stat,
 ):
+    _data_color = BREWER["teal"]
+    _fit_color = BREWER["orange"]
+    _headline_color = BREWER["purple"]
+
     fig_msq, (ax_msq, ax_msq_res) = plt.subplots(
         2, 1,
         figsize=(7.4, 5.9),
@@ -1109,7 +1139,7 @@ def _(
     if _T_in.size:
         ax_msq.axvspan(
             float(_T_in.min()), float(_T_in.max()),
-            color="C0", alpha=0.07, zorder=0,
+            color=_data_color, alpha=0.07, zorder=0,
         )
 
     excl = ~fit_mask
@@ -1123,13 +1153,13 @@ def _(
     ax_msq.errorbar(
         T_all[fit_mask], M0_sq_all[fit_mask] / scale,
         xerr=sT_all[fit_mask], yerr=sM0_sq_all[fit_mask] / scale,
-        fmt="o", color="C0", markersize=3.6, elinewidth=0.8,
+        fmt="o", color=_data_color, markersize=3.6, elinewidth=0.8,
         alpha=0.9, label=rf"fit window ($N_\mathrm{{fit}}={K_best}$)",
     )
 
     ax_msq.plot(
         T_line, _line_y,
-        "-", color="C3", linewidth=2.0,
+        "-", color=_fit_color, linewidth=2.0,
         label=rf"mean-field $T_\mathrm{{c}}={Tc_K:.1f}\pm{sigma_Tc_K:.1f}\,\mathrm{{K}}$",
     )
 
@@ -1141,7 +1171,7 @@ def _(
     ax_msq_res.errorbar(
         T_all[fit_mask], _residual,
         xerr=sT_all[fit_mask], yerr=_residual_sigma,
-        fmt="o", color="C0", markersize=3.2, elinewidth=0.8,
+        fmt="o", color=_data_color, markersize=3.2, elinewidth=0.8,
         alpha=0.9,
     )
     ax_msq_res.axhline(0, color="0.35", linewidth=0.8, linestyle="--")
@@ -1156,16 +1186,16 @@ def _(
         ax_msq_res.set_xlim(_res_x_lo - _res_x_pad, _res_x_hi + _res_x_pad)
 
     ax_msq.axhline(0, color="0.4", linewidth=0.6, linestyle="--")
-    ax_msq.axvline(Tc_K, color="C3", linewidth=0.8, linestyle=":")
+    ax_msq.axvline(Tc_K, color=_fit_color, linewidth=0.8, linestyle=":")
 
     ax_msq.fill_betweenx(
         [_y_lo, _y_hi], Tc_K - sigma_Tc_K, Tc_K + sigma_Tc_K,
-        color="C3", alpha=0.10,
+        color=_fit_color, alpha=0.10,
     )
 
     if np.isfinite(Tc_headline):
         ax_msq.axvline(
-            Tc_headline, color="C2", linewidth=1.4, linestyle="-",
+            Tc_headline, color=_headline_color, linewidth=1.4, linestyle="-",
             label=rf"half-height headline $T_\mathrm{{c}}^{{\mathrm{{app}}}}={Tc_headline:.1f}\pm{sigma_Tc_headline_stat:.1f}\,\mathrm{{K}}$",
         )
 
@@ -1210,7 +1240,7 @@ def _(
     selected_indices = sorted(set(selected_indices), key=lambda i: TEMPERATURE_K[i])
 
     loop_temperatures = TEMPERATURE_K[selected_indices]
-    cmap = plt.colormaps["viridis"]
+    cmap = plt.colormaps["YlGnBu"]
     norm = Normalize(vmin=float(loop_temperatures.min()), vmax=float(loop_temperatures.max()))
 
     fig_loops, ax_loops = plt.subplots(figsize=(7.2, 4.4), constrained_layout=True)
@@ -1247,15 +1277,15 @@ def _(
 
 
 @app.cell
-def _(Line2D, diagnostics, np, plt, save_figure, smooth, summary):
+def _(Line2D, BREWER, diagnostics, np, plt, save_figure, smooth, summary):
     fig_methods, ax_methods = plt.subplots(figsize=(7.2, 4.4), constrained_layout=True)
 
     temperature = summary["temperature_K"].to_numpy()
     sigma_T_arr = summary["sigma_T_K"].to_numpy()
     series = [
-        ("M_r_norm",    "sigma_M_r_norm",    r"$M_\mathrm{r}$ ($H=0$)",                         "C0", "o"),
-        ("M_sat_norm",  "sigma_M_sat_norm",  r"$M_\mathrm{sat}$ ($H=\pm H_\mathrm{sat}$)",  "C3", "s"),
-        ("M_0_norm",    "sigma_M_0_norm",    r"$M_0$ (sat. extrap. to $H=0$)",       "C2", "^"),
+        ("M_r_norm",    "sigma_M_r_norm",    r"$Y(X=0)$",                         BREWER["teal"], "o"),
+        ("M_sat_norm",  "sigma_M_sat_norm",  r"$Y(X_{\mathrm{min/max}})$",         BREWER["orange"], "s"),
+        ("M_0_norm",    "sigma_M_0_norm",    r"$Y_\mathrm{fit}(X=0)$",             BREWER["purple"], "^"),
     ]
 
     legend_handles = []
@@ -1313,6 +1343,7 @@ def _(Line2D, diagnostics, np, plt, save_figure, smooth, summary):
 
 @app.cell
 def _(
+    BREWER,
     TEMPERATURE_K,
     TIME_S,
     field_ready_temperature_K,
@@ -1321,6 +1352,10 @@ def _(
     save_figure,
     summary,
 ):
+    _data_color = BREWER["teal"]
+    _background_color = BREWER["green"]
+    _cut_color = BREWER["orange"]
+
     _fig_acq, (_ax_temp, _ax_field) = plt.subplots(
         2, 1, figsize=(7.2, 5.2), constrained_layout=True,
         gridspec_kw={"height_ratios": [1.25, 1.0]},
@@ -1333,13 +1368,13 @@ def _(
     _ax_temp.plot(TIME_S, TEMPERATURE_K, color="0.65", linewidth=1.2, label="logged temperature")
     _ax_temp.scatter(
         _retained_time, _retained_temperature,
-        s=12, color="C0", alpha=0.75, label="retained loops",
+        s=12, color=_data_color, alpha=0.75, label="retained loops",
     )
     _ax_temp.scatter(
         TIME_S[high_temperature_mask], TEMPERATURE_K[high_temperature_mask],
-        s=16, color="C2", alpha=0.80, label="background-fit quartile",
+        s=16, color=_background_color, alpha=0.80, label="background-fit quartile",
     )
-    _ax_temp.axvline(_ready_time, color="C3", linestyle="--", linewidth=1.0, label="field-ready cut")
+    _ax_temp.axvline(_ready_time, color=_cut_color, linestyle="--", linewidth=1.0, label="field-ready cut")
     _ax_temp.set_xlabel(r"$t$ (s)")
     _ax_temp.set_ylabel(r"$T$ (K)")
     _ax_temp.grid(True, which="major", alpha=0.25)
@@ -1351,12 +1386,12 @@ def _(
         _retained_temperature,
         summary["branch_hmax_A_per_m"].to_numpy() / 1000.0,
         xerr=summary["sigma_T_K"].to_numpy(),
-        fmt="o", color="C0", ecolor="C0", alpha=0.70,
+        fmt="o", color=_data_color, ecolor=_data_color, alpha=0.70,
         markersize=3.0, elinewidth=0.5, capsize=1.5,
         label=r"per-loop $|H|_\mathrm{max}$",
     )
     _ax_field.axvline(
-        field_ready_temperature_K, color="C3", linestyle="--", linewidth=1.0,
+        field_ready_temperature_K, color=_cut_color, linestyle="--", linewidth=1.0,
         label="field-ready cut",
     )
     _ax_field.set_xlabel(r"$T$ (K)")
@@ -1744,7 +1779,7 @@ def _(FIG_DIR, cross_run, run_curves, run_method_tcs):
 
 
 @app.cell
-def _(cross_run, plt, run_curves, save_figure, smooth):
+def _(BREWER, cross_run, plt, run_curves, save_figure, smooth):
     # Measured counterpart to the guide's finite-field sketch. We plot the
     # near-saturation branch-split proxy because it is evaluated at the drive
     # field itself, so it is the cleanest visual comparison of the three input
@@ -1756,7 +1791,11 @@ def _(cross_run, plt, run_curves, save_figure, smooth):
     _first = cross_run.loc[cross_run["run"] == "first"]
     _T_ref = float(_first["Tc_K_methods_mean"].iloc[0]) if not _first.empty else float(cross_run["Tc_K_methods_mean"].iloc[0])
     _run_order = ["third", "first", "second"]
-    _color_map = {"third": "#66a9ff", "first": "#1f77b4", "second": "#08306b"}
+    _color_map = {
+        "third": BREWER["purple"],
+        "first": BREWER["teal"],
+        "second": BREWER["orange"],
+    }
     _marker_map = {"third": "^", "first": "o", "second": "s"}
 
     for _run in _run_order:
@@ -1788,7 +1827,7 @@ def _(cross_run, plt, run_curves, save_figure, smooth):
         rotation=90, ha="left", va="bottom", color="0.25", fontsize=8,
     )
     ax_drive.set_xlabel(r"$T / T_{1/2}^{\mathrm{app}}$ (run 1)")
-    ax_drive.set_ylabel(r"normalized $M_\mathrm{sat}(T)$")
+    ax_drive.set_ylabel(r"normalized $Y(X_{\mathrm{min/max}})$")
     ax_drive.set_xlim(0.75, 1.45)
     ax_drive.set_ylim(-0.03, 1.03)
     ax_drive.minorticks_on()
@@ -1953,6 +1992,7 @@ def _(
 @app.cell
 def _(
     CW_BUFFER_K,
+    BREWER,
     TEMPERATURE_K,
     Tc_CW,
     Tc_seed_CW,
@@ -1968,6 +2008,9 @@ def _(
     sigma_Tc_CW,
     sigma_chi_vals,
 ):
+    _data_color = BREWER["teal"]
+    _fit_color = BREWER["orange"]
+
     # Plot 1/chi vs T with the Curie–Weiss line and Tc x-intercept.
     # Shade the excluded region so the fit window edge is unambiguous.
     fig_cw, (ax_cw, ax_cw_res) = plt.subplots(
@@ -2022,18 +2065,18 @@ def _(
         ax_cw.errorbar(
             _T_all[_used], _inv_chi_all[_used],
             xerr=_sigma_T_all[_used], yerr=_sigma_inv_all[_used],
-            fmt="o", color="C0", markersize=3.6, elinewidth=0.8,
+            fmt="o", color=_data_color, markersize=3.6, elinewidth=0.8,
             alpha=0.9, label="paramagnetic fit window",
         )
 
     if cw_result is not None and np.isfinite(Tc_CW):
         _T_line = np.linspace(max(Tc_CW, _x_lo), _x_hi, 200)
         ax_cw.plot(
-            _T_line, m_CW * _T_line + b_CW, "-", color="C3", linewidth=2.0,
+            _T_line, m_CW * _T_line + b_CW, "-", color=_fit_color, linewidth=2.0,
             label=rf"apparent Curie–Weiss $T_\mathrm{{c}}={Tc_CW:.1f}\pm{sigma_Tc_CW:.1f}\,\mathrm{{K}}$",
         )
         if _x_lo <= Tc_CW <= _x_hi:
-            ax_cw.axvline(Tc_CW, color="C3", linewidth=0.8, linestyle=":")
+            ax_cw.axvline(Tc_CW, color=_fit_color, linewidth=0.8, linestyle=":")
         if _used.any():
             _residual = _inv_chi_all[_used] - (m_CW * _T_all[_used] + b_CW)
             _residual_sigma = _sigma_inv_all[_used]
@@ -2042,7 +2085,7 @@ def _(
             ax_cw_res.errorbar(
                 _T_all[_used], _weighted_residual,
                 xerr=_sigma_T_all[_used], yerr=np.ones_like(_weighted_residual),
-                fmt="o", color="C0", markersize=3.2, elinewidth=0.8,
+                fmt="o", color=_data_color, markersize=3.2, elinewidth=0.8,
                 alpha=0.9,
             )
             _res_ylim = float(np.nanmax(np.abs(_weighted_residual) + 1.0))
@@ -2069,14 +2112,14 @@ def _(
                 ax_zoom.errorbar(
                     _T_all[_zoom & _used], _inv_chi_all[_zoom & _used],
                     xerr=_sigma_T_all[_zoom & _used], yerr=_sigma_inv_all[_zoom & _used],
-                    fmt="o", color="C0", markersize=2.5, elinewidth=0.5,
+                    fmt="o", color=_data_color, markersize=2.5, elinewidth=0.5,
                     alpha=0.85,
                 )
                 _T_zoom_line = np.linspace(max(Tc_CW, _zoom_x_lo), _zoom_x_hi, 100)
                 _zoom_line_y = m_CW * _T_zoom_line + b_CW
-                ax_zoom.plot(_T_zoom_line, _zoom_line_y, "-", color="C3", linewidth=1.3)
+                ax_zoom.plot(_T_zoom_line, _zoom_line_y, "-", color=_fit_color, linewidth=1.3)
                 ax_zoom.axhline(0, color="0.45", linewidth=0.5, linestyle="--")
-                ax_zoom.axvline(Tc_CW, color="C3", linewidth=0.6, linestyle=":")
+                ax_zoom.axvline(Tc_CW, color=_fit_color, linewidth=0.6, linestyle=":")
                 _zoom_y = _inv_chi_all[_zoom]
                 _zoom_sigma = _sigma_inv_all[_zoom]
                 _zoom_y_hi = max(
@@ -2319,6 +2362,7 @@ def _(
 
 @app.cell
 def _(
+    BREWER,
     Tc_CW,
     Tc_K,
     Tc_headline,
@@ -2337,21 +2381,21 @@ def _(
     if np.isfinite(Tc_headline) and np.isfinite(syst_total_all):
         _ax_tc.axhspan(
             Tc_headline - syst_total_all, Tc_headline + syst_total_all,
-            color="C0", alpha=0.06, label=r"all-drive diagnostic envelope",
+            color=BREWER["teal"], alpha=0.06, label=r"all-drive diagnostic envelope",
         )
     if np.isfinite(Tc_headline) and np.isfinite(syst_total):
         _ax_tc.axhspan(
             Tc_headline - syst_total, Tc_headline + syst_total,
-            color="C0", alpha=0.12, label=r"preferred high-drive uncertainty",
+            color=BREWER["teal"], alpha=0.12, label=r"preferred high-drive uncertainty",
         )
     if np.isfinite(Tc_headline) and np.isfinite(sigma_Tc_headline_stat):
         _ax_tc.axhspan(
             Tc_headline - sigma_Tc_headline_stat,
             Tc_headline + sigma_Tc_headline_stat,
-            color="C0", alpha=0.22, label=r"local crossing scatter only",
+            color=BREWER["teal"], alpha=0.22, label=r"local crossing scatter only",
         )
         _ax_tc.axhline(
-            Tc_headline, color="C0", linewidth=1.5,
+            Tc_headline, color=BREWER["teal"], linewidth=1.5,
             label=rf"headline $T_{{1/2}}^{{\mathrm{{app}}}}={Tc_headline:.1f}$ K",
         )
 
@@ -2362,9 +2406,17 @@ def _(
     _finite_run_methods = run_method_tcs.dropna(subset=["Tc_K"]) if "Tc_K" in run_method_tcs.columns else run_method_tcs.iloc[0:0]
     _run_order = ["first", "second", "third"]
     _run_label_map = {"first": "Run 1", "second": "Run 2", "third": "Run 3"}
-    _run_color_map = {"first": "C0", "second": "C2", "third": "C6"}
+    _run_color_map = {
+        "first": BREWER["teal"],
+        "second": BREWER["orange"],
+        "third": BREWER["purple"],
+    }
     _method_order = ["M_r", "M_sat", "M_0"]
-    _method_label_map = {"M_r": r"$M_\mathrm{r}$", "M_sat": r"$M_\mathrm{sat}$", "M_0": r"$M_0$"}
+    _method_label_map = {
+        "M_r": r"$Y$" + "\n" + r"$(X=0)$",
+        "M_sat": r"$Y$" + "\n" + r"$(X_{\mathrm{min/max}})$",
+        "M_0": r"$Y_{\mathrm{fit}}$" + "\n" + r"$(X=0)$",
+    }
     _method_marker_map = {"M_r": "o", "M_sat": "s", "M_0": "^"}
     _x = 0.0
     for _run in _run_order:
@@ -2399,7 +2451,7 @@ def _(
     if np.isfinite(Tc_K):
         _ax_tc.errorbar(
             _x, Tc_K, yerr=sigma_Tc_K,
-            fmt="D", color="C3", mfc="white", ecolor="C3", capsize=3, markersize=6,
+            fmt="D", color=BREWER["orange"], mfc="white", ecolor=BREWER["orange"], capsize=3, markersize=6,
             label=rf"mean-field check",
         )
         _x_positions.append(_x)
@@ -2408,7 +2460,7 @@ def _(
     if np.isfinite(Tc_CW):
         _ax_tc.errorbar(
             _x, Tc_CW, yerr=sigma_Tc_CW,
-            fmt="^", color="C4", ecolor="C4", capsize=3, markersize=6,
+            fmt="^", color=BREWER["rose"], ecolor=BREWER["rose"], capsize=3, markersize=6,
             label="Curie–Weiss check",
         )
         _x_positions.append(_x)
@@ -2446,6 +2498,7 @@ def _(
         _ax_tc.set_ylim(_y_lo, _y_hi)
 
     _ax_tc.set_xticks(_x_positions, _x_labels)
+    _ax_tc.tick_params(axis="x", labelsize=8)
     _ax_tc.set_ylabel(r"$T_\mathrm{c}$ (K)")
     _ax_tc.grid(True, axis="y", which="major", alpha=0.25)
     _ax_tc.minorticks_on()

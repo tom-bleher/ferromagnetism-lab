@@ -48,7 +48,7 @@ def _(mo):
     mo.md(r"""
     ## Course-style data processing conventions
 
-    Instrument uncertainties use the manufacturer specification or the display
+    Instrument uncertainties use the instr. specs or the display
     resolution uncertainty. Independent uncertainty contributions are combined
     in quadrature, and indirect quantities are propagated by the usual partial
     derivative rule.
@@ -72,6 +72,7 @@ def _():
     import numpy as np
     import pandas as pd
     import matplotlib.pyplot as plt
+    from cycler import cycler
 
     from uncertainties import ufloat, unumpy as unp
     from scipy.interpolate import PchipInterpolator
@@ -92,6 +93,18 @@ def _():
         ruler,
     )
 
+    # ColorBrewer Dark2: muted, high-contrast colours suitable for print.
+    BREWER = {
+        'teal': '#1b9e77',
+        'orange': '#d95f02',
+        'purple': '#7570b3',
+        'rose': '#e7298a',
+        'green': '#66a61e',
+        'gold': '#e6ab02',
+        'brown': '#a6761d',
+        'gray': '#666666',
+    }
+
     plt.rcParams.update({
         'figure.figsize':    (8.0, 4.8),
         'figure.dpi':        110,
@@ -99,6 +112,16 @@ def _():
         'font.size':         11,
         'font.family':       'DejaVu Sans',
         'mathtext.fontset':  'cm',
+        'axes.prop_cycle':   cycler(color=[
+            BREWER['teal'],
+            BREWER['orange'],
+            BREWER['purple'],
+            BREWER['green'],
+            BREWER['rose'],
+            BREWER['gold'],
+            BREWER['brown'],
+            BREWER['gray'],
+        ]),
         'axes.titlesize':    12,
         'axes.titlepad':     8,
         'axes.labelsize':    11,
@@ -142,6 +165,7 @@ def _():
         FIG_DIR,
         MU0_THEO,
         MU0_THEO_U,
+        BREWER,
         PhysicalSize,
         PchipInterpolator,
         caliper,
@@ -165,16 +189,25 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     _budget_md = r"""
-    | Quantity | Value | Uncertainty (rel) | Comment/Origin |
-    |---|---|---|---|
-    | $N$ (turns) | $250$ | — | count given |
-    | $L$ (Ampère loop) | $0.48\,\mathrm{m}$ | $\frac{2\sqrt{2}\,\mathrm{mm}}{\sqrt{12}} \approx 0.82\,\mathrm{mm}$ $(0.17\%)$ | two ruler measurements for sides $a,b$ (res $1\,\mathrm{mm}$) and indirect $L = 2(a+b)$: $\sigma_L = 2\sqrt{\sigma_a^2 + \sigma_b^2}$ |
-    | $L'$ | per measurement | $\frac{0.05\,\mathrm{mm}}{\sqrt{12}} \approx 14.4\,\mu\mathrm{m}$ | caliper (res $0.05\,\mathrm{mm}$) |
-    | $R_x$ (current-sense) | $2.999\,\mathrm{\Omega}$ | $4.3\,\mathrm{m\Omega}$ $(0.14\%)$ | From the instrument specification for the measurement range, we assign a manufacturer uncertainty of $\pm(0.010\%$ reading $+0.004\%$ range$)$; it is combined in quadrature with display resolution$/\sqrt{12}$ |
-    | $R_y$ (integrator) | $11.10\,\mathrm{k\Omega}$ | $0$ | Treated as an exact calibration constant by analysis convention; if measured as an uncertain quantity, it should use the same manufacturer-bound and resolution quadrature rule |
-    | $C$ (integrator) | $20.1\,\mu\mathrm{F}$ | $2.0\,\mathrm{nF}$ $(0.01\%)$ | value and uncertainty given |
-    | $A$ (core cross-section) | $16.0\,\mathrm{cm^{2}}$ | $A\,\sqrt{2}\,\dfrac{1\,\mathrm{mm}/\sqrt{12}}{40\,\mathrm{mm}} \approx 0.16\,\mathrm{cm^{2}}$ $(1.02\%)$ | two ruler measurements for sides $a,b\approx 4\,\mathrm{cm}$ (res $1\,\mathrm{mm}$) and indirect $A=a\cdot b$: $\sigma_A/A = \sqrt{(\sigma_a/a)^2 + (\sigma_b/b)^2}$ |
-    | $\Delta V_x,\,\Delta V_y$ (scope, dual-cursor) | per measurement | $\sqrt{\left(0.024\,\lvert V\rvert\right)^2 + (0.5\,\mathrm{mV}/\sqrt{12})^2}$ | From the oscilloscope specification, we assign a manufacturer uncertainty of $\pm(2.0\%$ vertical gain $+0.4\%$ full scale$)$, approximated as $0.024|V|$ for our cursor spans. The voltage resolution is $0.5\,\mathrm{mV}$, so $\sigma_{\mathrm{res}}=0.5\,\mathrm{mV}/\sqrt{12}$; the two contributions are combined in quadrature. |
+    | Quantity | Uncertainty treatment |
+    |---|---|
+    | $L$ (Ampère loop) | two ruler readings with $\sigma_L=2\sqrt{\sigma_a^2+\sigma_b^2}$ |
+    | $L'$ | caliper resolution, evaluated per measurement |
+    | $R_x$ (current-sense) | instr. bound $a_{R_x,\mathrm{instr}}$ combined with display resolution: $\sigma_{R_x}=\sqrt{a_{R_x,\mathrm{instr}}^2+\sigma_{R,q}^2}$ |
+    | $R_y$ (integrator) | treated as an exact calibration constant by analysis convention |
+    | $C$ (integrator) | given relative uncertainty, $\sigma_C/C=10^{-4}$ |
+    | $A$ (core cross-section) | indirect product $A=ab$, with $\sigma_A/A=\sqrt{(\sigma_a/a)^2+(\sigma_b/b)^2}$ |
+    | $\Delta V_x,\,\Delta V_y$ (scope, dual-cursor) | instr. bound combined with display resolution, evaluated per measured voltage |
+
+    Numerical summary for single-valued calibration constants:
+
+    | Quantity | Value | Standard uncertainty | Relative uncertainty |
+    |---|---:|---:|---:|
+    | $L$ | $0.4800\,\mathrm{m}$ | $0.00082\,\mathrm{m}$ | $0.17\%$ |
+    | $R_x$ | $2.999\,\Omega$ | $0.0043\,\Omega$ | $0.14\%$ |
+    | $R_y$ | $11.10\,\mathrm{k\Omega}$ | $0$ | $0\%$ |
+    | $C$ | $20.1\,\mu\mathrm{F}$ | $2.0\,\mathrm{nF}$ | $0.010\%$ |
+    | $A$ | $16.0\,\mathrm{cm^2}$ | $0.16\,\mathrm{cm^2}$ | $1.0\%$ |
     """
     mo.vstack([mo.md("## Uncertainties"), mo.center(mo.md(_budget_md))])
     return
@@ -330,7 +363,7 @@ def _(
 
 
 @app.cell
-def _(FIG_DIR, PchipInterpolator, np, plt, pt1):
+def _(BREWER, FIG_DIR, PchipInterpolator, np, plt, pt1):
     # B(H) anchored at the origin for plotting the peak-envelope curve;
     # μ_r(H) not anchored — μ_r(0) is a finite initial permeability we
     # do not measure directly.
@@ -355,7 +388,7 @@ def _(FIG_DIR, PchipInterpolator, np, plt, pt1):
         gridspec_kw={'height_ratios': [1.25, 1.0]},
     )
 
-    C_B, C_MU = 'C0', 'C3'
+    C_B, C_MU = BREWER['teal'], BREWER['orange']
 
     axB.plot(H_grid, interp_B(H_grid), '-', color=C_B, alpha=0.85, label=r'$B$ smooth guide')
     axB.errorbar(pt1['H'], pt1['B'],
@@ -455,6 +488,7 @@ def _(
     MU0_THEO,
     MU0_THEO_U,
     N,
+    BREWER,
     PhysicalSize,
     Rx,
     Ry,
@@ -519,8 +553,8 @@ def _(
         )
 
     RUNS = {
-        'vacuum-permeability-a': dict(label='Three copper plates to none', marker='o', color='C0'),
-        'vacuum-permeability-b': dict(label='Five copper plates to none',  marker='s', color='C1'),
+        'vacuum-permeability-a': dict(label='Three copper plates to none', marker='o', color=BREWER['teal']),
+        'vacuum-permeability-b': dict(label='Five copper plates to none',  marker='s', color=BREWER['orange']),
     }
     fits = {sheet: fit_gap(sheet) for sheet in RUNS}
 
