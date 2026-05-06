@@ -59,8 +59,8 @@ def _(mo):
     mo.md(r"""
     ## Course-style data processing conventions
 
-    Instrument and resolution uncertainties are combined in quadrature, and
-    indirect quantities are propagated by the usual partial derivative rule.
+    Independent uncertainties are combined in quadrature, and indirect
+    quantities are propagated by the usual partial derivative rule.
 
     The half-height crossings are local derived quantities, not fitted physical
     models. The two cross-check models in this notebook are the weighted line
@@ -258,18 +258,18 @@ def _(DATA_FILE, DATA_XLSX, SIGMA_T_ABS_K, T_TRANSITION_NOMINAL_K, mo, np, pd, r
     # each loop is acquired over a finite window dt_loop (~5.6 s here)
     # during which the sample temperature drifts by |dT/dt|*dt_loop. We
     # treat that drift as a uniform window centred on the logged T, so
-    # sigma_T_smear = |dT/dt|*dt_loop / sqrt(12). The LabVIEW T resolution
-    # is 1 mK (sigma_T_resolution ~ 0.3 mK), negligible against the heating-rate
-    # smearing near the transition. The thermometer absolute
-    # accuracy is treated separately as a fully-correlated systematic
-    # because it shifts T_c rigidly within a single run.
+    # sigma_T_smear = |dT/dt|*dt_loop / sqrt(12). The exported temperatures
+    # are written with up to millikelvin precision in some rows, but we do
+    # not have an independent instrument/export resolution spec to justify
+    # propagating a separate quantization term here. The thermometer absolute
+    # accuracy is treated separately as a fully-correlated systematic because
+    # it shifts T_c rigidly within a single run.
     _t_s = data["Time (sec)"].to_numpy(float)
     _T_K = temperature_K.to_numpy(float)
     _dT_dt = np.gradient(_T_K, _t_s)
     _dt_loop = float(np.median(np.diff(_t_s))) if len(_t_s) > 1 else 0.0
     sigma_T_smear = np.abs(_dT_dt) * _dt_loop / np.sqrt(12.0)
-    _T_resolution = 1e-3
-    sigma_T_K = np.sqrt(sigma_T_smear**2 + (_T_resolution / np.sqrt(12.0)) ** 2)
+    sigma_T_K = sigma_T_smear.copy()
 
     # Adaptive 508BR thermometer absolute bound across the actual T range
     # for diagnostic display only; this is a fully-correlated systematic
@@ -977,7 +977,8 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, pd, summary):
 
     def _fit_top_K(idx_sorted, K):
         sel = idx_sorted[:K]
-        sT_s = np.maximum(sT_all[sel], 1e-3 / np.sqrt(12.0))
+        # Numerical guard only; not a physical temperature-resolution term.
+        sT_s = np.maximum(sT_all[sel], 1e-12)
         sMsq_s = np.maximum(sM0_sq_all[sel], 1e-30)
         try:
             res = odr_fit(
@@ -1509,7 +1510,6 @@ def _(
 
         dt_loop = float(np.median(np.diff(t_s))) if len(t_s) > 1 else 0.0
         sT = np.abs(np.gradient(T_K, t_s)) * dt_loop / np.sqrt(12.0)
-        sT = np.sqrt(sT**2 + (1e-3 / np.sqrt(12.0)) ** 2)
 
         run_name = path.parent.name
         I_rms = _I_rms_dict.get(run_name, 1.97)
@@ -1673,7 +1673,8 @@ def _(
         scan = []
         for K in range(K_MIN, len(idx_sorted) + 1):
             sel = idx_sorted[:K]
-            sT_safe = np.maximum(sT_used[sel], 1e-3 / np.sqrt(12.0))
+            # Numerical guard only; not a physical temperature-resolution term.
+            sT_safe = np.maximum(sT_used[sel], 1e-12)
             sMsq_safe = np.maximum(sMsq[sel], 1e-30)
             try:
                 res_K = odr_fit(
@@ -1972,7 +1973,8 @@ def _(
         _inv_chi = 1.0 / chi_vals[mask_CW]
         _sigma_inv_chi = sigma_chi_vals[mask_CW] / chi_vals[mask_CW] ** 2
         _T_CW = T_arr[mask_CW]
-        _sT_CW = np.maximum(sT_arr[mask_CW], 1e-3 / np.sqrt(12.0))
+        # Numerical guard only; not a physical temperature-resolution term.
+        _sT_CW = np.maximum(sT_arr[mask_CW], 1e-12)
         _sIC = np.maximum(_sigma_inv_chi, 1e-30)
         try:
             cw_result = odr_fit(
