@@ -51,25 +51,31 @@ def _manufacturer_spec_uncertainty(bound):
     return np.asarray(bound, dtype=float)
 
 
-# Manufacturer resistance specification: full-scale range -> (%rdg, %range).
+# HP 34401A 1-year resistance specification: full-scale range -> (%rdg, %range).
+# The manual allows 20% overrange on resistance ranges.
 _DMM_R_RANGES: dict[float, tuple[float, float]] = {
     100:       (0.010e-2, 0.004e-2),
     1_000:     (0.010e-2, 0.001e-2),
     10_000:    (0.010e-2, 0.001e-2),
     100_000:   (0.010e-2, 0.001e-2),
     1_000_000: (0.010e-2, 0.001e-2),
+    10_000_000: (0.040e-2, 0.001e-2),
+    100_000_000: (0.800e-2, 0.010e-2),
 }
+_DMM_R_OVERRANGE = 1.20
 
 
 def digital_multimeter_resistance(R: float, *, include_resolution: bool = True) -> float:
-    """Keysight 34401A 1-year σ on the smallest range that fits ``R``.
+    """HP 34401A 1-year σ on the smallest resistance range that fits ``R``.
 
     The manufacturer's ``±(%rdg + %range)`` accuracy is used directly as
-    the instrument uncertainty, following the course-guide convention.
+    the instrument uncertainty, following the course-guide convention. The
+    20% overrange in the manual is included when choosing the range. The
+    manual's extra 2-wire lead-resistance term is not added.
     Disable ``include_resolution`` when the logged value is already rounded
     and the display resolution would be double-counted.
     """
-    rng = next(r for r in sorted(_DMM_R_RANGES) if abs(R) <= r)
+    rng = next(r for r in sorted(_DMM_R_RANGES) if abs(R) <= _DMM_R_OVERRANGE * r)
     pct_rdg, pct_rng = _DMM_R_RANGES[rng]
     sigma = float(_manufacturer_spec_uncertainty(pct_rdg * abs(R) + pct_rng * rng))
     if include_resolution:

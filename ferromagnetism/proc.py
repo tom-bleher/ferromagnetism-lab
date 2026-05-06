@@ -48,10 +48,10 @@ def _(mo):
     mo.md(r"""
     ## Course-style data processing conventions
 
-    Instrument uncertainties use the instr. specs or the display
-    resolution uncertainty. Independent uncertainty contributions are combined
-    in quadrature, and indirect quantities are propagated by the usual partial
-    derivative rule.
+    Instrument uncertainties use the manufacturer specs combined with the
+    display-resolution uncertainty. Independent uncertainty contributions are
+    combined in quadrature, and indirect quantities are propagated by the usual
+    partial derivative rule.
 
     The copper-gap measurement is the only fitted model in this notebook. For
     that fit the notebook reports the fit parameters, relative errors,
@@ -193,11 +193,14 @@ def _(mo):
     |---|---|
     | $L$ (Ampère loop) | two ruler readings with $\sigma_L=2\sqrt{\sigma_a^2+\sigma_b^2}$ |
     | $L'$ | caliper resolution, evaluated per measurement |
-    | $R_x$ (current-sense) | instr. bound $a_{R_x,\mathrm{instr}}$ combined with display resolution: $\sigma_{R_x}=\sqrt{a_{R_x,\mathrm{instr}}^2+\sigma_{R,q}^2}$ |
-    | $R_y$ (integrator) | treated as an exact calibration constant by analysis convention |
+    | $R_x$ (current-sense) | HP 34401A $100\,\Omega$-range instr. bound combined with display resolution: $\sigma_{R_x}=\sqrt{a_{R_x,\mathrm{instr}}^2+\sigma_{R,q}^2}$ |
+    | $R_y$ (integrator) | HP 34401A $10\,\mathrm{k\Omega}$-range instr. bound (using the manual's 20% overrange) combined with the logged-value resolution: $\sigma_{R_y}=\sqrt{a_{R_y,\mathrm{instr}}^2+\sigma_{R,q}^2}$ |
     | $C$ (integrator) | given relative uncertainty, $\sigma_C/C=10^{-4}$ |
     | $A$ (core cross-section) | indirect product $A=ab$, with $\sigma_A/A=\sqrt{(\sigma_a/a)^2+(\sigma_b/b)^2}$ |
-    | $\Delta V_x,\,\Delta V_y$ (scope, dual-cursor) | instr. bound combined with display resolution, evaluated per measured voltage |
+    | $\Delta V_x,\,\Delta V_y$ (scope, dual-cursor) | instr. bound combined with $0.5\,\mathrm{mV}$ display resolution, evaluated per measured voltage |
+
+    The HP 34401A resistance specs assume 4-wire ohms or 2-wire ohms with
+    Math Null; no separate lead-resistance term is added here.
 
     Numerical summary for single-valued calibration constants:
 
@@ -205,7 +208,7 @@ def _(mo):
     |---|---:|---:|---:|
     | $L$ | $0.4800\,\mathrm{m}$ | $0.00082\,\mathrm{m}$ | $0.17\%$ |
     | $R_x$ | $2.999\,\Omega$ | $0.0043\,\Omega$ | $0.14\%$ |
-    | $R_y$ | $11.10\,\mathrm{k\Omega}$ | $0$ | $0\%$ |
+    | $R_y$ | $11.10\,\mathrm{k\Omega}$ | $0.029\,\mathrm{k\Omega}$ | $0.26\%$ |
     | $C$ | $20.1\,\mu\mathrm{F}$ | $2.0\,\mathrm{nF}$ | $0.010\%$ |
     | $A$ | $16.0\,\mathrm{cm^2}$ | $0.16\,\mathrm{cm^2}$ | $1.0\%$ |
     """
@@ -228,8 +231,6 @@ def _(
     ruler,
     ufloat,
 ):
-    import warnings
-
     _p = read_table(DATA_XLSX, sheet_name='apparatus').iloc[0]
     N      = int(_p['N'])
     L_nom  = float(_p['L (m)'])
@@ -243,8 +244,7 @@ def _(
     u_Lp = caliper()
 
     u_Rx = digital_multimeter_resistance(Rx_nom)
-    # By analysis convention, R_y is treated as an exact calibration constant.
-    u_Ry = 0.0
+    u_Ry = digital_multimeter_resistance(Ry_nom)
     u_C  = 0.0001 * C_nom
 
     # A = a·b with a = b = 4 cm on a 1-mm ruler ⇒ σ_A/A ≈ 1.0 %.
@@ -258,12 +258,7 @@ def _(
 
     L  = ufloat(L_nom,  u_L,  'L')
     Rx = ufloat(Rx_nom, u_Rx, 'Rx')
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            'ignore',
-            message='Using UFloat objects with std_dev==0 may give unexpected results.',
-        )
-        Ry = ufloat(Ry_nom, u_Ry, 'Ry')
+    Ry = ufloat(Ry_nom, u_Ry, 'Ry')
     C  = ufloat(C_nom,  u_C,  'C')
     A  = ufloat(A_nom,  u_A,  'A')
 
@@ -713,11 +708,10 @@ def _(MU0_THEO, RUNS, fits, mo, np):
     - $A$: budgeted at 1.0 %. To explain a 30–35 % bias on its own,
       the cross-section would need to be 23 cm² instead of 16 cm² —
       far outside the budget.
-    - $R_x$ and $C$: budgeted below 0.2 %. $R_y$ is treated as exact by
-      analysis convention. Off-by-30 % is not credible for any of these
-      in isolation. (The film capacitor $C$ is the loosest by typical-
-      tolerance arguments, but its measured value is closer to its nominal
-      than the bias requires.)
+    - $R_x$ and $C$: budgeted below 0.2 %. $R_y$ is budgeted at about
+      0.26 %. Off-by-30 % is not credible for any of these in isolation.
+      (The film capacitor $C$ is the loosest by typical-tolerance arguments,
+      but its measured value is closer to its nominal than the bias requires.)
     - $L'$: budgeted at $\sim$15 µm absolute, which is 3–14 % relative
       depending on the plate count. Two effects compound: (i) the
       caliper resolution itself is appreciable on a 0.10 mm plate, and (ii)

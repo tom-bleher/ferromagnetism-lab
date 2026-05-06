@@ -156,15 +156,14 @@ def _():
     # references/instrument-manuals/thermocouple_508br_label.jpg):
     #     ±(0.1% rdg + 1 °C) on -60 °C to 1372 °C
     #     ±(0.1% rdg + 2 °C) on -60 °C to -220 °C
-    # Following the Part 1 convention, only manufacturer specs from the
-    # actual instrument's documentation are propagated; the probe-wire
-    # tolerance is not (it would have to be inferred from the 502A
-    # sister-model manual + IEC 60584-2 Class 2 K-type, neither of which
-    # documents this specific 508BR's probe). This is fully correlated
-    # across loops in a run, so it is reported as a separate systematic
-    # and not folded into the per-loop sigma_T used for fit weights.
-    # The headline scalar is evaluated at the transition (T_c ≈ 215 K
-    # = -58 °C, in the warm-range branch).
+    # Following the simple course-level convention used in the earlier
+    # notebooks, the device accuracy is folded directly into the per-loop
+    # temperature uncertainty. Only manufacturer specs from the actual
+    # instrument's documentation are propagated; the probe-wire tolerance
+    # is not (it would have to be inferred from the 502A sister-model manual
+    # + IEC 60584-2 Class 2 K-type, neither of which documents this specific
+    # 508BR's probe). The headline scalar is evaluated at the transition
+    # (T_c ≈ 215 K = -58 °C, in the warm-range branch).
     def sigma_T_thermometer_K(T_K):
         """508BR meter accuracy, in K, evaluated at T_K (device-label spec)."""
         T_C = np.asarray(T_K, dtype=float) - 273.15
@@ -258,24 +257,25 @@ def _(DATA_FILE, DATA_XLSX, SIGMA_T_ABS_K, T_TRANSITION_NOMINAL_K, mo, np, pd, r
     # each loop is acquired over a finite window dt_loop (~5.6 s here)
     # during which the sample temperature drifts by |dT/dt|*dt_loop. We
     # treat that drift as a uniform window centred on the logged T, so
-    # sigma_T_smear = |dT/dt|*dt_loop / sqrt(12). The exported temperatures
-    # are written with up to millikelvin precision in some rows, but we do
-    # not have an independent instrument/export resolution spec to justify
-    # propagating a separate quantization term here. The thermometer absolute
-    # accuracy is treated separately as a fully-correlated systematic because
-    # it shifts T_c rigidly within a single run.
+    # sigma_T_smear = |dT/dt|*dt_loop / sqrt(12). The exported temperature
+    # is resolved to 1 mK, and the 508BR device accuracy is included
+    # directly in quadrature with the local terms.
     _t_s = data["Time (sec)"].to_numpy(float)
     _T_K = temperature_K.to_numpy(float)
     _dT_dt = np.gradient(_T_K, _t_s)
     _dt_loop = float(np.median(np.diff(_t_s))) if len(_t_s) > 1 else 0.0
+    _T_resolution_K = 1e-3
+    sigma_T_resolution = _T_resolution_K / np.sqrt(12.0)
     sigma_T_smear = np.abs(_dT_dt) * _dt_loop / np.sqrt(12.0)
-    sigma_T_K = sigma_T_smear.copy()
-
-    # Adaptive 508BR thermometer absolute bound across the actual T range
-    # for diagnostic display only; this is a fully-correlated systematic
-    # that shifts T_c rigidly, so it is *not* added to sigma_T_K (which
-    # is used as fit weights for the per-loop crossing).
     _sigma_T_therm_per_loop = sigma_T_thermometer_K(_T_K)
+    sigma_T_K = np.sqrt(
+        sigma_T_smear ** 2
+        + sigma_T_resolution ** 2
+        + _sigma_T_therm_per_loop ** 2
+    )
+
+    # Adaptive 508BR thermometer absolute bound across the actual T range.
+    # In this simplified treatment it is already included in sigma_T_K.
 
     # Integrator-validity check for the Curie circuit. Same logic as the
     # ferromagnetism notebook: the R_y-C circuit is an ideal integrator
@@ -295,8 +295,8 @@ def _(DATA_FILE, DATA_XLSX, SIGMA_T_ABS_K, T_TRANSITION_NOMINAL_K, mo, np, pd, r
     - samples per branch: `{len(X_POS)}`
     - temperature range: `{temperature_K.min():.3f}` to `{temperature_K.max():.3f}` K
     - calibration constants: `H/Vx = {H_PER_X:.6g} A m^-1 V^-1`, `B/Vy = {B_PER_Y:.6g} T V^-1`
-    - loop window: `{_dt_loop:.2f}` s; per-loop $\sigma_T$ over the raw run (median, p95): `{np.median(sigma_T_K):.3f}`, `{np.percentile(sigma_T_K, 95):.3f}` K
-    - 508BR thermometer absolute bound across this run (min, median, max): `{np.min(_sigma_T_therm_per_loop):.2f}`, `{np.median(_sigma_T_therm_per_loop):.2f}`, `{np.max(_sigma_T_therm_per_loop):.2f}` K; headline at $T_c\approx{T_TRANSITION_NOMINAL_K:.0f}$ K is $\sigma_\text{{therm}}={SIGMA_T_ABS_K:.2f}$ K (see dedicated cell below for the formula).
+    - loop window: `{_dt_loop:.2f}` s; temperature resolution term: `{sigma_T_resolution:.4f}` K; per-loop $\sigma_T$ over the raw run (median, p95): `{np.median(sigma_T_K):.3f}`, `{np.percentile(sigma_T_K, 95):.3f}` K
+    - 508BR thermometer accuracy included in $\sigma_T$: bound across this run (min, median, max): `{np.min(_sigma_T_therm_per_loop):.2f}`, `{np.median(_sigma_T_therm_per_loop):.2f}`, `{np.max(_sigma_T_therm_per_loop):.2f}` K; at $T_c\approx{T_TRANSITION_NOMINAL_K:.0f}$ K it is `{SIGMA_T_ABS_K:.2f}` K.
 
     The Curie circuit constants are set to match the lab schematic
     ($N_1=250$ primary, $N_2=2500$ secondary, $R_y=3.97\,\mathrm{{k\Omega}}$,
@@ -493,6 +493,96 @@ def _(
         order = _tail_order(H_arr, tail)
         return _linear_intercept(H_arr[order][:n], M_arr[order][:n])
 
+    def _select_saturation_window(H, M, tail, n_min=5, frac=0.95, slope_tol_sigma=1.5):
+        # Pick the saturation-tail window with two literature-grounded gates:
+        #   (i)  near-saturation pre-cut |M| >= frac * |M_0_seed|, where the
+        #        seed comes from the guide's strict n_min-point linear fit
+        #        (the standard "M >= 0.95 M_s" rule from the law-of-approach
+        #        literature);
+        #   (ii) slope-stability plateau: starting from the outermost point
+        #        inside that pool, grow n one point at a time and stop when
+        #        the linear slope drifts by more than slope_tol_sigma * sigma
+        #        from the previous window. The largest n on the plateau is
+        #        the data-driven boundary of the linear regime.
+        # Returns (h_window, m_window, n_used) ordered outermost-first so the
+        # downstream estimators (linear and law-of-approach) can share the
+        # same physical points.
+        H_arr = np.asarray(H, dtype=float)
+        M_arr = np.asarray(M, dtype=float)
+        order = _tail_order(H_arr, tail)
+        Ho, Mo = H_arr[order], M_arr[order]
+
+        n_seed = min(n_min, len(Ho))
+        if n_seed < 3:
+            return Ho[:n_seed], Mo[:n_seed], n_seed
+        b_seed, _, _, _ = _linear_fit(Ho[:n_seed], Mo[:n_seed])
+
+        if tail == "pos" and b_seed > 0:
+            pool = Mo >= frac * b_seed
+        elif tail == "neg" and b_seed < 0:
+            pool = Mo <= frac * b_seed
+        else:
+            # Seed intercept has the wrong sign — the loop is not actually
+            # saturated (typical near T_c). Fall back to the seed window so
+            # the caller still gets a well-defined fit.
+            return Ho[:n_seed], Mo[:n_seed], n_seed
+
+        Hp, Mp = Ho[pool], Mo[pool]
+        if len(Hp) < n_min:
+            return Ho[:n_seed], Mo[:n_seed], n_seed
+
+        best_n = n_min
+        _, _, prev_alpha, prev_s = _linear_fit(Hp[:n_min], Mp[:n_min])
+        for n in range(n_min + 1, len(Hp) + 1):
+            _, _, alpha, s_alpha = _linear_fit(Hp[:n], Mp[:n])
+            ref = max(prev_s, s_alpha, 1e-30)
+            if abs(alpha - prev_alpha) > slope_tol_sigma * ref:
+                break
+            best_n = n
+            prev_alpha, prev_s = alpha, s_alpha
+
+        return Hp[:best_n], Mp[:best_n], best_n
+
+    def sat_intercept_plateau(H, M, tail, n_min=5, frac=0.95, slope_tol_sigma=1.5):
+        # Linear saturation-tail fit with adaptive window. Returns
+        # (intercept, sigma_intercept, n_used).
+        h, m, n_used = _select_saturation_window(
+            H, M, tail, n_min=n_min, frac=frac, slope_tol_sigma=slope_tol_sigma,
+        )
+        if len(h) < 2:
+            return float("nan"), float("nan"), n_used
+        b, sb = _linear_intercept(h, m)
+        return b, sb, n_used
+
+    def _loa_fit(h, m):
+        # Three-parameter law-of-approach fit  M = M_0 + alpha*H + c/H.
+        # The 1/H term absorbs the leading non-linearity that biases a
+        # straight-line extrapolation low. Returns (intercept, sigma_intercept).
+        n = len(h)
+        if n < 4 or float(np.min(np.abs(h))) < 1e-12:
+            return float("nan"), float("nan")
+        X = np.column_stack([np.ones_like(h), h, 1.0 / h])
+        coeffs, *_ = np.linalg.lstsq(X, m, rcond=None)
+        pred = X @ coeffs
+        ssr = float(np.sum((m - pred) ** 2))
+        sigma2 = ssr / max(n - 3, 1)
+        try:
+            cov = sigma2 * np.linalg.inv(X.T @ X)
+        except np.linalg.LinAlgError:
+            return float("nan"), float("nan")
+        return float(coeffs[0]), float(np.sqrt(max(cov[0, 0], 0.0)))
+
+    def sat_intercept_loa(H, M, tail, n_min=5, frac=0.95, slope_tol_sigma=1.5):
+        # Saturation-tail fit using the law-of-approach form, on the same
+        # window selected by sat_intercept_plateau. Sharing the window makes
+        # the difference between this estimator and the linear one a pure
+        # model-form effect, suitable as a per-loop method systematic on M_0.
+        h, m, n_used = _select_saturation_window(
+            H, M, tail, n_min=n_min, frac=frac, slope_tol_sigma=slope_tol_sigma,
+        )
+        b, sb = _loa_fit(h, m)
+        return b, sb, n_used
+
     return (
         TEMPERATURE_C,
         TEMPERATURE_K,
@@ -502,6 +592,8 @@ def _(
         local_intercept_at,
         normalize_01_with_sigma,
         sat_intercept_fixed,
+        sat_intercept_loa,
+        sat_intercept_plateau,
         smooth,
         transition_diagnostics,
     )
@@ -576,6 +668,8 @@ def _(
     pd,
     remove_background,
     sat_intercept_fixed,
+    sat_intercept_loa,
+    sat_intercept_plateau,
     sigma_T_K,
     transition_diagnostics,
 ):
@@ -663,13 +757,32 @@ def _(
         # M_0 itself is invariant under this choice (a_bg, b_bg cancel
         # in the half-difference), so this is a notational fix; it
         # matches the cross-run cell.
+        # Headline Method III: linear saturation-tail fit on a data-driven
+        # window. The window is set by two literature-grounded gates — a
+        # near-saturation cut (M >= 0.95 M_0_seed, where M_0_seed is the
+        # guide's strict 5-point fit) and a slope-stability plateau on
+        # alpha. This avoids hand-picking n and adapts loop-by-loop to
+        # softening near T_c.
+        _bP_pos, _sP_pos, _nP_pos = sat_intercept_plateau(_H_pos, _M_pos_corr, tail="pos")
+        _bP_neg, _sP_neg, _nP_neg = sat_intercept_plateau(_H_neg, _M_neg_corr, tail="neg")
+        _M_0 = 0.5 * (_bP_pos - _bP_neg)
+        _sigma_M_0 = 0.5 * float(np.hypot(_sP_pos, _sP_neg))
+
+        # Law-of-approach cross-check on the same window: M = M_0 + alpha*H
+        # + c/H. The 1/H term captures the leading non-linearity that biases
+        # a pure linear extrapolation low; the difference M_0 - M_0_loa is
+        # a per-loop method systematic.
+        _bL_pos, _sL_pos, _ = sat_intercept_loa(_H_pos, _M_pos_corr, tail="pos")
+        _bL_neg, _sL_neg, _ = sat_intercept_loa(_H_neg, _M_neg_corr, tail="neg")
+        _M_0_loa = 0.5 * (_bL_pos - _bL_neg)
+        _sigma_M_0_loa = 0.5 * float(np.hypot(_sL_pos, _sL_neg))
+
+        # Strict 5-point fit kept as a sensitivity column — this was the
+        # previous headline and matches the guide's literal prescription.
         _b_5pt_pos, _s_5pt_pos = sat_intercept_fixed(_H_pos, _M_pos_corr, tail="pos")
         _b_5pt_neg, _s_5pt_neg = sat_intercept_fixed(_H_neg, _M_neg_corr, tail="neg")
-
-        # Primary Method III follows the guide's strict 5-point saturated-tail
-        # prescription.
-        _M_0 = 0.5 * (_b_5pt_pos - _b_5pt_neg)
-        _sigma_M_0 = 0.5 * float(np.hypot(_s_5pt_pos, _s_5pt_neg))
+        _M_0_5pt = 0.5 * (_b_5pt_pos - _b_5pt_neg)
+        _sigma_M_0_5pt = 0.5 * float(np.hypot(_s_5pt_pos, _s_5pt_neg))
 
         records.append({
             "time_s": TIME_S[_i],
@@ -683,7 +796,12 @@ def _(
             "sigma_M_sat_A_per_m": _sigma_M_sat,
             "M_0_A_per_m": _M_0,
             "sigma_M_0_A_per_m": _sigma_M_0,
-            "M_0_5pt_A_per_m": _M_0,
+            "M_0_5pt_A_per_m": _M_0_5pt,
+            "sigma_M_0_5pt_A_per_m": _sigma_M_0_5pt,
+            "M_0_loa_A_per_m": _M_0_loa,
+            "sigma_M_0_loa_A_per_m": _sigma_M_0_loa,
+            "n_tail_pos": int(_nP_pos),
+            "n_tail_neg": int(_nP_neg),
         })
 
     summary = pd.DataFrame.from_records(records)
@@ -715,7 +833,7 @@ def _(
     ])
 
     # Local half-height T_c uncertainty for each method. Folds the
-    # per-loop sigma_T (heating-rate smearing) and the per-loop sigma_y
+    # per-loop sigma_T (heating-rate smearing, resolution, and instrument accuracy) and the per-loop sigma_y
     # together to give a usable statistical 1-sigma on the half-height
     # crossing temperature. Methods I and II use this; Method III also
     # produces a half-height crossing on the normalized M_0 curve, but
@@ -1462,6 +1580,7 @@ def _(
     odr_fit,
     pd,
     read_table,
+    sigma_T_thermometer_K,
 ):
     # Cross-run check: re-run the same three half-height estimators on all
     # three physical Curie scans. The guide explicitly asks to repeat the
@@ -1509,7 +1628,14 @@ def _(
         yn = [c for c in df.columns if c.startswith("Y_neg")]
 
         dt_loop = float(np.median(np.diff(t_s))) if len(t_s) > 1 else 0.0
-        sT = np.abs(np.gradient(T_K, t_s)) * dt_loop / np.sqrt(12.0)
+        T_resolution_K = 1e-3
+        sigma_T_resolution = T_resolution_K / np.sqrt(12.0)
+        sigma_T_smear = np.abs(np.gradient(T_K, t_s)) * dt_loop / np.sqrt(12.0)
+        sT = np.sqrt(
+            sigma_T_smear ** 2
+            + sigma_T_resolution ** 2
+            + sigma_T_thermometer_K(T_K) ** 2
+        )
 
         run_name = path.parent.name
         I_rms = _I_rms_dict.get(run_name, 1.97)
@@ -2191,7 +2317,6 @@ def _(
 
 @app.cell(hide_code=True)
 def _(
-    SIGMA_T_ABS_K,
     Tc_CW,
     Tc_K,
     cross_run,
@@ -2251,17 +2376,19 @@ def _(
     run_tcs_preferred = finite_runs_preferred[_run_estimator_col].to_numpy(dtype=float) if not finite_runs_preferred.empty else np.array([])
     run_spread = float(np.std(run_tcs_preferred, ddof=1)) if len(run_tcs_preferred) >= 2 else run_spread_all
 
-    # Systematic budget: combines the inter-method spread (within-run
-    # methodological systematic), the run-to-run spread of the *half-height*
-    # T_c per run (cross-run systematic on the same estimator family), and
-    # the fully-correlated thermometer absolute-accuracy term. The preferred
-    # high-drive budget excludes the low-drive third run; the conservative
-    # all-drive envelope retains all three drive settings as a stress test.
+    # Budget: combines the inter-method spread (within-run methodological
+    # systematic), the run-to-run spread of the *half-height* T_c per run
+    # (cross-run systematic on the same estimator family), and the local
+    # crossing uncertainty. The local crossing uncertainty already includes
+    # heating smear, temperature resolution, and 508BR instrument accuracy.
+    # The preferred high-drive budget excludes the low-drive third run; the
+    # conservative all-drive envelope retains all three drive settings as a
+    # stress test.
     # The mean-field-vs-half-height shift is not added in quadrature here:
     # the mean-field model is not adopted as the headline estimator, and
     # its methodological information is reported separately.
-    syst_total = float(np.hypot(np.hypot(method_spread, run_spread), SIGMA_T_ABS_K))
-    syst_total_all = float(np.hypot(np.hypot(method_spread, run_spread_all), SIGMA_T_ABS_K))
+    syst_total = float(np.hypot(np.hypot(method_spread, run_spread), sigma_Tc_headline_stat))
+    syst_total_all = float(np.hypot(np.hypot(method_spread, run_spread_all), sigma_Tc_headline_stat))
     # Display only: gap between the mean-field check and the half-height
     # headline, kept for context but not in the systematic.
     mf_shift_display = float(abs(Tc_K - Tc_headline)) if np.isfinite(Tc_K) and np.isfinite(Tc_headline) else 0.0
@@ -2354,13 +2481,9 @@ def _(
 
     - method-to-method spread of the half-height crossings within run `first`: $\sigma_\text{{method}}={method_spread:.1f}\,\mathrm{{K}}$;
     - run-to-run spread of the per-run three-method estimates across the complete high-drive scans: $\sigma_\text{{run}}={run_spread:.1f}\,\mathrm{{K}}$;
-    - thermometer absolute-accuracy term: $\sigma_\text{{therm}}={SIGMA_T_ABS_K:.1f}\,\mathrm{{K}}$;
+    - local half-height extraction uncertainty, including heating smear, 1 mK resolution, and 508BR device accuracy: $\sigma_\text{{local}}={sigma_Tc_headline_stat:.1f}\,\mathrm{{K}}$;
 
     in quadrature.
-
-    The thermometer term shifts $T_c$ rigidly within a single run, so it
-    does not affect $\sigma_{{T_c}}^\text{{stat}}$; it is carried in the
-    quoted systematic error instead.
 
     **Check: linearized mean-field $T_c$ on run `first`.**
     The $M_0^2(T)\propto T_c-T$ form is a near-$T_c$ approximation.
