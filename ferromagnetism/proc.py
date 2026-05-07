@@ -188,6 +188,49 @@ def _():
     )
 
 
+@app.cell
+def _(BREWER, FIG_DIR, np, plt):
+    _H = np.linspace(-1.25, 1.25, 600)
+    _Hc = 0.28
+    _upper = np.tanh(3.2 * (_H + _Hc))
+    _lower = np.tanh(3.2 * (_H - _Hc))
+    _Br = float(np.tanh(3.2 * _Hc))
+
+    _fig, _ax = plt.subplots(figsize=(5.2, 3.75), constrained_layout=True)
+    _loop_color = BREWER["teal"]
+    _guide_color = "0.35"
+    _ax.plot(_H, _upper, color=_loop_color, linewidth=2.1)
+    _ax.plot(_H, _lower, color=_loop_color, linewidth=2.1)
+    _ax.axhline(0.0, color="0.20", linewidth=0.85)
+    _ax.axvline(0.0, color="0.20", linewidth=0.85)
+    _ax.plot([0.0, 0.0], [0.0, _Br], color=_guide_color, linestyle="--", linewidth=0.9)
+    _ax.plot([0.0, _Hc], [0.0, 0.0], color=_guide_color, linestyle="--", linewidth=0.9)
+    _ax.scatter([0.0, _Hc], [_Br, 0.0], s=24, color=_loop_color, zorder=4)
+
+    for _idx, _curve, _step in [(420, _upper, 26), (180, _lower, -26)]:
+        _ax.annotate(
+            "",
+            xy=(_H[_idx + _step], _curve[_idx + _step]),
+            xytext=(_H[_idx], _curve[_idx]),
+            arrowprops={"arrowstyle": "-|>", "color": _loop_color, "linewidth": 1.25},
+        )
+
+    _ax.text(0.05, _Br + 0.04, r"$B_r$", ha="left", va="bottom", fontsize=11)
+    _ax.text(_Hc + 0.04, -0.06, r"$H_c$", ha="left", va="top", fontsize=11)
+    _ax.text(1.03, 0.90, r"$B_s$", ha="left", va="center", fontsize=11)
+    _ax.set_xlabel(r"applied field $H$")
+    _ax.set_ylabel(r"flux density $B$")
+    _ax.set_xlim(-1.28, 1.28)
+    _ax.set_ylim(-1.08, 1.08)
+    _ax.set_xticks([])
+    _ax.set_yticks([])
+    _ax.minorticks_off()
+    _ax.grid(False)
+    _fig.savefig(FIG_DIR / "hysteresis_schematic.pdf", bbox_inches="tight", dpi=600)
+    plt.close(_fig)
+    return
+
+
 @app.cell(hide_code=True)
 def _(mo):
     _budget_md = r"""
@@ -367,8 +410,6 @@ def _(BREWER, FIG_DIR, PchipInterpolator, np, plt, pt1):
     Hmu_sorted, _uj = np.unique(H_mu, return_index=True)
     interp_mu = PchipInterpolator(Hmu_sorted, mu_vals[_uj])
     Hmu_grid = np.linspace(H_mu.min(), H_mu.max(), 500)
-    peak_idx = pt1["mu_rel"].idxmax()
-
     fig, axB = plt.subplots(figsize=(8.8, 4.8), constrained_layout=True)
     axMu = axB.twinx()
 
@@ -430,15 +471,6 @@ def _(BREWER, FIG_DIR, PchipInterpolator, np, plt, pt1):
         capsize=3.0,
         label=r"$\mu_{\mathrm{r}}(H)$",
     )
-    _peak_H = pt1.loc[peak_idx, "H"]
-    axMu.axvline(
-        _peak_H,
-        color=C_MU,
-        linestyle=":",
-        linewidth=2.2,
-        alpha=0.75,
-        label=r"$\mu_{\mathrm{r}}^{\max}$",
-    )
     axMu.set_ylabel(r"$\mu_{\mathrm{r}}=\mu/\mu_0$", color=C_MU, fontsize=FS_LABEL)
     axMu.tick_params(axis="y", colors=C_MU, labelsize=FS_TICK)
     axMu.spines["right"].set_color(C_MU)
@@ -461,12 +493,15 @@ def _(BREWER, FIG_DIR, PchipInterpolator, np, plt, pt1):
 
     _x_hi = float((pt1["H"] + pt1["sH"]).max()) * 1.02
     axB.set_xlim(0.0, _x_hi)
-    axB.set_ylim(0.0, float((pt1["B"] + pt1["sB"]).max()) * 1.20)
+    _B_hi = max(
+        float((pt1["B"] + pt1["sB"]).max()),
+        float(np.nanmax(interp_B(H_grid))),
+    )
+    axB.set_ylim(0.0, _B_hi * 1.08)
     _mu_lo = float((pt1["mu_rel"] - pt1["s_mu_rel"]).min())
     _mu_hi = float((pt1["mu_rel"] + pt1["s_mu_rel"]).max())
-    _mu_pad = 0.06 * (_mu_hi - _mu_lo)
-    _mu_top = _mu_hi + _mu_pad
-    axMu.set_ylim(max(0.0, _mu_lo - _mu_pad), _mu_top + 0.16 * (_mu_top - _mu_lo))
+    _mu_pad = 0.04 * (_mu_hi - _mu_lo)
+    axMu.set_ylim(max(0.0, _mu_lo - _mu_pad), _mu_hi + _mu_pad)
 
     fig.savefig(FIG_DIR / "fig_BH_mu.pdf", bbox_inches="tight", dpi=600)
     fig
@@ -651,6 +686,7 @@ def _(FIG_DIR, RUNS, fits, np, plt):
         gridspec_kw={"height_ratios": [2.4, 1.0]},
     )
     _x_edges = []
+    _y_edges = []
     _res_edges = []
 
     def _draw(sheet, f):
@@ -663,6 +699,8 @@ def _(FIG_DIR, RUNS, fits, np, plt):
         residual_NIB = f["y_fit"] - yhat_NIB
         _x_edges.append(Lp_mm - sx_mm)
         _x_edges.append(Lp_mm + sx_mm)
+        _y_edges.append(f["y_fit"] - f["sy_fit"])
+        _y_edges.append(f["y_fit"] + f["sy_fit"])
         _res_edges.append(np.abs(residual_NIB) + f["sy_fit"])
 
         ax_fit.errorbar(
@@ -679,7 +717,12 @@ def _(FIG_DIR, RUNS, fits, np, plt):
             capsize=2.5,
             label=style["label"],
         )
-        xs_m = np.linspace(0, f["x"].max() * 1.05, 60)
+        xs_m = np.linspace(
+            max(0.0, float(np.min(f["x"] - f["sx"]))),
+            float(np.max(f["x"] + f["sx"])),
+            80,
+        )
+        _y_edges.append(slope_NIB * xs_m + intercept_NIB)
         ax_fit.plot(
             xs_m * 1e3,
             slope_NIB * xs_m + intercept_NIB,
@@ -717,6 +760,12 @@ def _(FIG_DIR, RUNS, fits, np, plt):
         _x_hi = float(np.nanmax(_x_all))
         _x_pad = max(0.01, 0.04 * (_x_hi - _x_lo))
         ax_fit.set_xlim(_x_lo - _x_pad, _x_hi + _x_pad)
+    if _y_edges:
+        _y_all = np.concatenate(_y_edges)
+        _y_lo = float(np.nanmin(_y_all))
+        _y_hi = float(np.nanmax(_y_all))
+        _y_pad = max(8.0, 0.05 * (_y_hi - _y_lo))
+        ax_fit.set_ylim(_y_lo - _y_pad, _y_hi + _y_pad)
 
     ax_res.axhline(0, color="gray", linestyle="--", linewidth=0.8)
     if _res_edges:
@@ -724,7 +773,7 @@ def _(FIG_DIR, RUNS, fits, np, plt):
         if np.isfinite(_res_lim) and _res_lim > 0:
             ax_res.set_ylim(-1.12 * _res_lim, 1.12 * _res_lim)
     ax_res.set_xlabel(r"$L'$ (mm)")
-    ax_res.set_ylabel(r"residual (A$\cdot$T$^{-1}$)")
+    ax_res.set_ylabel(r"$NI/B - f(L')$" + "\n" + r"(A$\cdot$T$^{-1}$)")
     ax_res.minorticks_on()
     ax_res.grid(True, which="major", alpha=0.25)
     ax_res.grid(True, which="minor", alpha=0.10)

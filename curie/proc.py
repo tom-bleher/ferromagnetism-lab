@@ -41,7 +41,7 @@ def _(mo):
            is the guide's algebraic Method III, written in SI as
            "$B/\mu_0-(\alpha+1)H=M_0$"; the spontaneous magnetization.
     - chain Method III into a weighted mean-field fit
-      $M_0^2(T)\propto T_c-T$ to extract $T_c\pm\sigma_{T_c}$.
+      the relative-coordinate $M_0^2(T)\propto T_c-T$ trend to extract $T_c\pm\sigma_{T_c}$.
 
     The calibration relations used are
 
@@ -211,7 +211,75 @@ def _():
 
 
 @app.cell
-def _(DATA_FILE, FIELD_READY_FRACTION, FIG_DIR, Line2D, Normalize, np, pd, plt):
+def _(np, plt, save_figure):
+    _t = np.linspace(0.0, 2.25, 600)
+    _zero_field = np.sqrt(np.clip(1.0 - _t**2, 0.0, None))
+
+    def _finite_field_curve(offset, center, width):
+        _curve = offset + (1.0 - offset) / (1.0 + np.exp((_t - center) / width))
+        return _curve / _curve[0]
+
+    _fig, _ax = plt.subplots(figsize=(4.2, 3.35), constrained_layout=True)
+    _blue = "#2166ac"
+    _ax.plot(_t, _zero_field, "--", color="0.05", linewidth=2.0, label=r"$H=0$")
+    for _offset, _center, _width, _alpha, _label in [
+        (0.06, 1.02, 0.14, 0.96, r"$H\ne0$"),
+        (0.28, 1.35, 0.36, 0.96, None),
+        (0.68, 1.90, 0.55, 0.96, None),
+    ]:
+        _ax.plot(
+            _t,
+            _finite_field_curve(_offset, _center, _width),
+            color=_blue,
+            linewidth=1.9,
+            alpha=_alpha,
+            label=_label,
+        )
+    _ax.annotate(
+        "",
+        xy=(1.75, 0.86),
+        xytext=(1.35, 0.27),
+        arrowprops={
+            "arrowstyle": "-|>",
+            "color": "0.05",
+            "linewidth": 1.1,
+            "connectionstyle": "arc3,rad=0.35",
+        },
+    )
+    _ax.text(
+        1.83,
+        0.81,
+        "larger\nfield",
+        ha="left",
+        va="center",
+        fontsize=10.0,
+        color="0.05",
+        bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.82, "pad": 1.0},
+    )
+    _ax.set_xlabel(r"$T/T_{\mathrm{c}}$")
+    _ax.set_ylabel(r"$M/M_{\mathrm{sat}}$")
+    _ax.set_xlim(0.0, 2.25)
+    _ax.set_ylim(-0.02, 1.04)
+    _ax.minorticks_on()
+    _ax.grid(True, which="major", alpha=0.24)
+    _ax.grid(True, which="minor", alpha=0.10)
+    _ax.legend(loc="lower left", framealpha=0.94)
+    save_figure(_fig, "curie_finite_field_schematic")
+    plt.close(_fig)
+    return
+
+
+@app.cell
+def _(
+    DATA_FILE,
+    FIELD_READY_FRACTION,
+    FIG_DIR,
+    Line2D,
+    Normalize,
+    np,
+    pd,
+    plt,
+):
     import re
 
     data_prep_dir = DATA_FILE.parent.parent
@@ -222,7 +290,6 @@ def _(DATA_FILE, FIELD_READY_FRACTION, FIG_DIR, Line2D, Normalize, np, pd, plt):
     ]
     scope_target_temperatures_K = [83.0, 130.0, 181.0, 205.0, 225.0, 270.0]
     discarded_color = "0.55"
-    kept_color = "#1b9e77"
     plateau_color = "#4477aa"
     threshold_color = "0.18"
 
@@ -282,33 +349,22 @@ def _(DATA_FILE, FIELD_READY_FRACTION, FIG_DIR, Line2D, Normalize, np, pd, plt):
 
         x_all = np.concatenate([loop["X (Volt)"].to_numpy(float) for loop in loops])
         y_all = np.concatenate([loop["Y (Volt)"].to_numpy(float) for loop in loops])
-        x_pad = 0.06 * (float(x_all.max()) - float(x_all.min()))
-        y_pad = 0.10 * (float(y_all.max()) - float(y_all.min()))
+        x_pad = 0.04 * (float(x_all.max()) - float(x_all.min()))
+        y_pad = 0.07 * (float(y_all.max()) - float(y_all.min()))
         xlim = (float(x_all.min()) - x_pad, float(x_all.max()) + x_pad)
         ylim = (float(y_all.min()) - y_pad, float(y_all.max()) + y_pad)
 
         cmap = plt.get_cmap("viridis")
         norm = Normalize(vmin=float(temps_K.min()), vmax=float(temps_K.max()))
         colors = [cmap(norm(temp_K)) for temp_K in temps_K]
-        alphas = [0.78, 0.82, 1.0, 1.0, 1.0, 1.0]
-        stage_labels = [
-            "start",
-            "field settling",
-            "first kept",
-            "kept ferro",
-            "near transition",
-            "paramagnetic",
-        ]
 
         fig, axes = plt.subplots(2, 3, figsize=(9.25, 4.9), sharex=True, sharey=True)
-        for ax, loop, temp_K, color, alpha, stage in zip(
-            axes.flat, loops, temps_K, colors, alphas, stage_labels
-        ):
+        for ax, loop, temp_K, color in zip(axes.flat, loops, temps_K, colors):
             ax.plot(
                 loop["X (Volt)"],
                 loop["Y (Volt)"],
                 color=color,
-                alpha=alpha,
+                alpha=0.95,
                 linewidth=1.85,
             )
             ax.set_xlim(*xlim)
@@ -316,241 +372,155 @@ def _(DATA_FILE, FIELD_READY_FRACTION, FIG_DIR, Line2D, Normalize, np, pd, plt):
             ax.grid(True, which="major", alpha=0.22, linestyle="--", linewidth=0.5)
             ax.minorticks_on()
             ax.grid(True, which="minor", alpha=0.10, linestyle="--", linewidth=0.4)
-            ax.text(
-                0.05,
-                0.93,
-                stage,
-                transform=ax.transAxes,
-                ha="left",
-                va="top",
-                fontsize=9.2,
-                color="0.12",
-                bbox={
-                    "facecolor": "white",
-                    "edgecolor": "0.80",
-                    "boxstyle": "round,pad=0.22",
-                    "alpha": 0.90,
-                },
-            )
-            ax.text(
-                0.95,
-                0.07,
-                f"{temp_K:.0f} K",
-                transform=ax.transAxes,
-                ha="right",
-                va="bottom",
-                fontsize=9.2,
-                color="0.12",
-                bbox={
-                    "facecolor": "white",
-                    "edgecolor": "0.80",
-                    "boxstyle": "round,pad=0.22",
-                    "alpha": 0.90,
-                },
-            )
+            ax.set_title(rf"${temp_K:.0f}\,\mathrm{{K}}$", fontsize=9.2, pad=4)
 
         for ax in axes[:, 0]:
             ax.set_ylabel(r"$V_y$ (V)")
         for ax in axes[-1, :]:
             ax.set_xlabel(r"$V_x$ (V)")
 
-        fig.subplots_adjust(top=0.965, bottom=0.08, right=0.88, wspace=0.18, hspace=0.16)
-        cax = fig.add_axes([0.905, 0.18, 0.022, 0.66])
-        sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
-        sm.set_array([])
-        cbar = fig.colorbar(sm, cax=cax)
-        cbar.set_label("Temperature (K)")
-        cbar.set_ticks(temps_K)
-        cbar.set_ticklabels([f"{temp_K:.0f}" for temp_K in temps_K])
+        fig.subplots_adjust(top=0.945, bottom=0.08, right=0.985, wspace=0.18, hspace=0.24)
         _save_data_prep_figure(fig, "curie_scope_transition_frames")
         plt.close(fig)
 
     def _make_data_preparation_cuts():
-        run_data = []
-        for run in data_prep_runs:
-            current = _read_curie(data_prep_dir / run["name"])
-            x_window, plateau, threshold, ready_idx = _field_ready(current)
-            run_data.append(
-                {
-                    "label": run["label"],
-                    "name": run["name"],
-                    "color": run["color"],
-                    "current": current,
-                    "x_window": x_window,
-                    "plateau": plateau,
-                    "threshold": threshold,
-                    "ready_idx": ready_idx,
-                    "ready_T": float(current["T_K"].iloc[ready_idx]),
-                }
-            )
-
-        fig = plt.figure(figsize=(9.4, 7.8))
-        gs = fig.add_gridspec(
-            3,
-            2,
-            width_ratios=[1.25, 1.10],
-            hspace=0.32,
-            wspace=0.26,
+        fig, ax = plt.subplots(figsize=(7.4, 4.25), constrained_layout=True)
+        ax.axhline(1.0, color=plateau_color, linewidth=1.0, alpha=0.85)
+        ax.axhline(
+            FIELD_READY_FRACTION,
+            color=threshold_color,
+            linestyle=(0, (5.0, 2.2)),
+            linewidth=0.95,
+            label=r"0.98 cut",
         )
 
-        for row, d in enumerate(run_data):
-            ax_decision = fig.add_subplot(gs[row, 0])
-            right_gs = gs[row, 1].subgridspec(
-                1,
-                2,
-                width_ratios=[1.0, 0.045],
-                wspace=0.08,
-            )
-            ax_loop = fig.add_subplot(right_gs[0, 0])
-            cax = fig.add_subplot(right_gs[0, 1])
-
-            T = d["current"]["T_K"].to_numpy(float)
-            ratio = d["x_window"] / d["plateau"]
-            ready_idx = d["ready_idx"]
+        discarded_labeled = False
+        _T_edges = []
+        _ratio_edges = []
+        for run in data_prep_runs:
+            current = _read_curie(data_prep_dir / run["name"])
+            x_window, plateau, _, ready_idx = _field_ready(current)
+            T = current["T_K"].to_numpy(float)
+            ratio = x_window / plateau
+            _T_edges.append(T)
+            _ratio_edges.append(ratio)
             before = np.arange(len(T)) < ready_idx
             after = ~before
-            last_trimmed_idx = max(ready_idx - 1, 0)
 
-            ax_decision.axvspan(
-                T.min(), d["ready_T"], color=discarded_color, alpha=0.055, linewidth=0
-            )
-            ax_decision.axvspan(
-                d["ready_T"], T.max(), color=kept_color, alpha=0.055, linewidth=0
-            )
-            ax_decision.scatter(
+            ax.scatter(
                 T[before],
                 ratio[before],
                 s=10,
                 color=discarded_color,
-                alpha=0.72,
+                alpha=0.42,
                 edgecolor="none",
+                label="discarded" if not discarded_labeled else None,
             )
-            ax_decision.scatter(
+            discarded_labeled = True
+            ax.plot(T[after], ratio[after], color=run["color"], linewidth=1.25, alpha=0.72)
+            ax.scatter(
                 T[after],
                 ratio[after],
-                s=10,
-                color=kept_color,
-                alpha=0.76,
+                s=13,
+                color=run["color"],
+                alpha=0.82,
                 edgecolor="none",
+                label=run["label"],
             )
-            ax_decision.axhline(1.0, color=plateau_color, linewidth=1.05)
-            ax_decision.axhline(
-                FIELD_READY_FRACTION,
-                color=threshold_color,
-                linestyle=(0, (5.0, 2.2)),
-                linewidth=0.95,
+            ax.scatter(
+                T[ready_idx],
+                ratio[ready_idx],
+                s=26,
+                marker="D",
+                color=run["color"],
+                edgecolor="white",
+                linewidth=0.55,
+                zorder=4,
             )
-            ax_decision.axvline(
-                d["ready_T"],
-                color=kept_color,
-                linestyle="-",
-                linewidth=1.05,
-                alpha=0.85,
-                zorder=1.5,
-            )
-            ax_decision.set_title(d["label"], fontsize=9.6, pad=6)
-            ax_decision.set_ylabel(r"$X_\mathrm{win}/X_\mathrm{plateau}$", labelpad=7)
-            ax_decision.set_ylim(0.70, 1.06)
-            ax_decision.grid(True, which="major", alpha=0.22, linestyle="--", linewidth=0.5)
-            ax_decision.minorticks_on()
-            ax_decision.grid(True, which="minor", alpha=0.09, linestyle="--", linewidth=0.4)
-            if row == 2:
-                ax_decision.set_xlabel("Temperature (K)")
-            else:
-                ax_decision.set_xticklabels([])
 
-            loop_dir = data_prep_dir / d["name"]
-            trimmed_indices = np.arange(0, ready_idx, dtype=int)
-            if trimmed_indices.size == 0:
-                trimmed_indices = np.array([0], dtype=int)
-            sample_count = min(13, trimmed_indices.size)
-            sample_indices = np.unique(
-                np.rint(np.linspace(trimmed_indices[0], trimmed_indices[-1], sample_count)).astype(int)
-            )
-            if sample_indices[-1] != last_trimmed_idx:
-                sample_indices = np.r_[sample_indices, last_trimmed_idx]
-            sample_indices = np.unique(sample_indices)
-
-            loops = []
-            loop_temps = []
-            for idx in sample_indices:
-                path = _nearest_loop_file(loop_dir, float(T[idx]))
-                loop = pd.read_csv(path, sep="\t")
-                loops.append(loop)
-                loop_temps.append(_loop_temperature_from_path(path) + 273.15)
-            loop_temps = np.asarray(loop_temps)
-            norm = Normalize(vmin=float(loop_temps.min()), vmax=float(loop_temps.max()))
-            cmap = plt.get_cmap("viridis")
-
-            for loop, temp_K in zip(loops, loop_temps):
-                is_last = np.isclose(temp_K, loop_temps[-1])
-                ax_loop.plot(
-                    loop["X (Volt)"],
-                    loop["Y (Volt)"],
-                    color=cmap(norm(temp_K)),
-                    linewidth=1.05 if not is_last else 1.9,
-                    alpha=0.40 if not is_last else 0.95,
-                    zorder=2 if not is_last else 4,
-                )
-            ax_loop.set_title(
-                f"discarded: {loop_temps[0]:.0f}-{loop_temps[-1]:.0f} K",
-                fontsize=9.6,
-                pad=6,
-            )
-            ax_loop.grid(True, which="major", alpha=0.22, linestyle="--", linewidth=0.5)
-            ax_loop.minorticks_on()
-            ax_loop.grid(True, which="minor", alpha=0.09, linestyle="--", linewidth=0.4)
-            ax_loop.set_ylabel(r"$V_y$ (V)", labelpad=6)
-            if row == 2:
-                ax_loop.set_xlabel(r"$V_x$ (V)")
-            else:
-                ax_loop.set_xticklabels([])
-
-            sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
-            sm.set_array([])
-            cbar = fig.colorbar(sm, cax=cax)
-            cbar.ax.tick_params(labelsize=7.1, length=2)
-            cbar.set_ticks([loop_temps[0], loop_temps[-1]])
-            cbar.set_ticklabels([f"{loop_temps[0]:.0f} K", f"{loop_temps[-1]:.0f} K"])
-
-        legend_handles = [
-            Line2D(
-                [],
-                [],
-                marker="o",
-                linestyle="None",
-                markersize=4.0,
-                markerfacecolor=kept_color,
-                markeredgecolor="none",
-                label="kept",
-            ),
-            Line2D([], [], color=plateau_color, linewidth=1.15, label=r"stable field"),
-            Line2D(
-                [],
-                [],
-                color=threshold_color,
-                linestyle=(0, (5.0, 2.2)),
-                linewidth=1.0,
-                label=r"98% threshold",
-            ),
-        ]
-        fig.subplots_adjust(top=0.910, bottom=0.075, left=0.075, right=0.955)
-
-        fig.legend(
-            handles=legend_handles,
-            loc="upper center",
-            bbox_to_anchor=(0.5, 0.982),
-            ncol=3,
-            fontsize=7.3,
-            framealpha=0.94,
-            handlelength=2.2,
-            columnspacing=1.2,
-        )
+        ax.set_xlabel("Temperature (K)")
+        ax.set_ylabel(r"$X_\mathrm{win}/X_\mathrm{plateau}$")
+        if _T_edges:
+            _T_all = np.concatenate(_T_edges)
+            _T_pad = max(2.0, 0.02 * (float(np.nanmax(_T_all)) - float(np.nanmin(_T_all))))
+            ax.set_xlim(float(np.nanmin(_T_all)) - _T_pad, float(np.nanmax(_T_all)) + _T_pad)
+        if _ratio_edges:
+            _ratio_all = np.concatenate(_ratio_edges)
+            _r_lo = max(0.70, float(np.nanmin(_ratio_all)) - 0.02)
+            _r_hi = min(1.06, float(np.nanmax(_ratio_all)) + 0.02)
+            ax.set_ylim(_r_lo, _r_hi)
+        else:
+            ax.set_ylim(0.70, 1.06)
+        ax.minorticks_on()
+        ax.grid(True, which="major", alpha=0.24)
+        ax.grid(True, which="minor", alpha=0.10)
+        ax.legend(loc="lower right", ncol=2, fontsize=7.8, framealpha=0.94)
         _save_data_prep_figure(fig, "curie_data_preparation_cuts")
+        plt.close(fig)
+
+    def _make_rejected_loop_example():
+        run = data_prep_runs[0]
+        current = _read_curie(data_prep_dir / run["name"])
+        _, _, _, ready_idx = _field_ready(current)
+        T = current["T_K"].to_numpy(float)
+        loop_dir = data_prep_dir / run["name"]
+
+        discarded_indices = np.arange(0, ready_idx, dtype=int)
+        sample_indices = np.unique(
+            np.rint(
+                np.linspace(
+                    discarded_indices[0],
+                    discarded_indices[-1],
+                    min(6, discarded_indices.size),
+                )
+            ).astype(int)
+        )
+        selected = [pd.read_csv(_nearest_loop_file(loop_dir, float(T[idx])), sep="\t") for idx in sample_indices]
+        first_kept = pd.read_csv(_nearest_loop_file(loop_dir, float(T[ready_idx])), sep="\t")
+
+        x_all = np.concatenate(
+            [loop["X (Volt)"].to_numpy(float) for loop in [*selected, first_kept]]
+        )
+        y_all = np.concatenate(
+            [loop["Y (Volt)"].to_numpy(float) for loop in [*selected, first_kept]]
+        )
+        x_pad = 0.04 * (float(x_all.max()) - float(x_all.min()))
+        y_pad = 0.06 * (float(y_all.max()) - float(y_all.min()))
+
+        fig, ax = plt.subplots(figsize=(5.3, 4.0), constrained_layout=True)
+        for j, loop in enumerate(selected):
+            ax.plot(
+                loop["X (Volt)"],
+                loop["Y (Volt)"],
+                color="0.68",
+                linewidth=0.95,
+                alpha=0.45,
+                label="discarded" if j == 0 else None,
+            )
+        ax.plot(
+            first_kept["X (Volt)"],
+            first_kept["Y (Volt)"],
+            color=run["color"],
+            linewidth=1.75,
+            alpha=0.95,
+            label="first kept",
+        )
+        ax.axhline(0.0, color="0.25", linewidth=0.7)
+        ax.axvline(0.0, color="0.25", linewidth=0.7)
+        ax.set_xlim(float(x_all.min()) - x_pad, float(x_all.max()) + x_pad)
+        ax.set_ylim(float(y_all.min()) - y_pad, float(y_all.max()) + y_pad)
+        ax.set_xlabel(r"$V_x$ (V)")
+        ax.set_ylabel(r"$V_y$ (V)")
+        ax.minorticks_on()
+        ax.grid(True, which="major", alpha=0.24)
+        ax.grid(True, which="minor", alpha=0.10)
+        ax.legend(loc="lower right", fontsize=8.2, framealpha=0.94)
+        _save_data_prep_figure(fig, "curie_rejected_loop_example")
         plt.close(fig)
 
     _make_scope_transition_frames()
     _make_data_preparation_cuts()
+    _make_rejected_loop_example()
     return
 
 
@@ -582,13 +552,11 @@ def _(
     #   R2 = 3.97 kΩ (Ry),  C = 19.78 µF
     #   R1 = 0.15 .. 2 Ω variable (Rx)
     # L (solenoid length over the Monel rod) and A (rod cross-section)
-    # are not on the schematic; the hysteresis-sheet values below are
-    # placeholders so the absolute axes are dimensionally consistent.
-    # *** None of these enter T_c. *** Methods 1-3 locate the temperature
-    # at which M(T) crosses a normalized threshold, so any common
-    # multiplicative rescaling of M (or H) leaves T_c invariant. The
-    # override is here so the diagnostic plots (M in A/m, H in A/m)
-    # reflect the Curie circuit rather than the toroid circuit.
+    # are not on the schematic; the hysteresis-sheet values below are only
+    # placeholders for an uncalibrated voltage-to-axis scale. The absolute H
+    # and M axes are therefore not material measurements. The transition
+    # estimate uses normalized loop proxies and is reported as an apparent
+    # half-height temperature, not as an absolute magnetization calibration.
     N1 = 250
     N2 = 2500
     Ry = 3.97e3
@@ -650,16 +618,17 @@ def _(
     - rows: `{len(data)}` loops
     - samples per branch: `{len(X_POS)}`
     - temperature range: `{temperature_K.min():.3f}` to `{temperature_K.max():.3f}` K
-    - calibration constants: `H/Vx = {H_PER_X:.6g} A m^-1 V^-1`, `B/Vy = {B_PER_Y:.6g} T V^-1`
+    - relative plotting constants: `H*/Vx = {H_PER_X:.6g} rel-unit V^-1`, `B*/Vy = {B_PER_Y:.6g} rel-unit V^-1`
     - loop window: `{_dt_loop:.2f}` s; temperature resolution term: `{sigma_T_resolution:.4f}` K; per-loop $\sigma_T$ over the raw run (median, p95): `{np.median(sigma_T_K):.3f}`, `{np.percentile(sigma_T_K, 95):.3f}` K
     - 508BR thermometer accuracy included in $\sigma_T$: bound across this run (min, median, max): `{np.min(_sigma_T_therm_per_loop):.2f}`, `{np.median(_sigma_T_therm_per_loop):.2f}`, `{np.max(_sigma_T_therm_per_loop):.2f}` K; at $T_c\approx{T_TRANSITION_NOMINAL_K:.0f}$ K it is `{SIGMA_T_ABS_K:.2f}` K.
 
     The Curie circuit constants are set to match the lab schematic
     ($N_1=250$ primary, $N_2=2500$ secondary, $R_y=3.97\,\mathrm{{k\Omega}}$,
     $C=19.78\,\mu\mathrm{{F}}$). The geometric constants used for the
-    diagnostic $H$ and $M$ scales enter only through common linear
-    rescalings; the transition-temperature extraction uses normalized
-    curves and is not set by those absolute scales.
+    relative $H^*$ and $M^*$ axes were not fully calibrated for the Curie sample,
+    so those axes are retained only as plotting/proxy coordinates. The
+    transition-temperature extraction uses normalized curves and is not
+    presented as an absolute magnetization measurement.
 
     **Integrator check.** The $R_y$–$C$ circuit measuring $V_y\propto B$
     is a valid integrator only when $\omega R_y C \gg 1$. Its exact transfer
@@ -678,10 +647,10 @@ def _(
     Curie pipeline; the $V_y\to B$ relation $B = R_y C V_y/(N_2 A)$ is safe to use.
 
     **Why apparatus uncertainties are not propagated here**: the Curie
-    methods all locate the temperature where $M(T)$ vanishes. Any common
-    rescaling of $M$ (from $N_1$, $N_2$, $L$, $R_x$, $R_y$, $C$, $A$)
-    leaves the $T$-axis intercept unchanged, so the apparatus-constant
-    budget cancels in $T_c$ and is intentionally not carried here.
+    methods locate apparent transition temperatures from normalized loop
+    proxies. Unknown geometric factors therefore remain part of the
+    uncalibrated relative-axis scale rather than the reported $T_{{1/2}}^{{\mathrm{{app}}}}$
+    uncertainty budget.
     """)
     return B_PER_Y, H_PER_X, X_NEG, X_POS, Y_NEG, Y_POS, data, sigma_T_K
 
@@ -1148,7 +1117,6 @@ def _(
         branch_point_sigmas,
         branches_for_row,
         half_height_tc_with_sigma,
-        line_fit_sigma,
         linear_odr_fit,
         local_intercept_at,
         normalize_01_with_sigma,
@@ -1203,12 +1171,12 @@ def _(background_intercept, background_slope, high_temperature_mask, mo):
     The guide notes that above $T_c$ the sample still has field-induced magnetization. We fit $\chi_\mathrm{{bg}}$ on the highest-T quartile (`{int(high_temperature_mask.sum())}` loops) as an empirical linear high-temperature background. This avoids choosing a circular fixed $T_c$ cutoff, but it is still a modelling choice; for marginal coverage scans it can include transition-tail data and is therefore treated as part of the method systematic. The fit form is
 
     $$
-    M_\mathrm{{bg}}(H)=aH+b.
+    M^*_\mathrm{{bg}}(H^*)=aH^*+b.
     $$
 
-    Fit used here: `a = {background_slope:.6g}`, `b = {background_intercept:.6g} A/m`.
+    Fit used here in uncalibrated relative-axis units: `a = {background_slope:.6g}`, `b = {background_intercept:.6g}`.
 
-    The extracted $M(T)$ proxies below use $M_\mathrm{{corr}} = M - M_\mathrm{{bg}}$ before normalization.
+    The extracted $M(T)$ proxies below use $M^*_\mathrm{{corr}} = M^* - M^*_\mathrm{{bg}}$ before normalization.
     """)
     return
 
@@ -1382,15 +1350,15 @@ def _(
                 "temperature_C": TEMPERATURE_C[_i],
                 "temperature_K": TEMPERATURE_K[_i],
                 "sigma_T_K": float(sigma_T_K[_i]),
-                "branch_hmax_A_per_m": branch_hmax[_i],
-                "M_r_A_per_m": _M_r,
-                "sigma_M_r_A_per_m": _sigma_M_r,
-                "M_sat_A_per_m": _M_sat,
-                "sigma_M_sat_A_per_m": _sigma_M_sat,
-                "M_0_A_per_m": _M_0,
-                "sigma_M_0_A_per_m": _sigma_M_0,
-                "M_0_5pt_A_per_m": _M_0_5pt,
-                "sigma_M_0_5pt_A_per_m": _sigma_M_0_5pt,
+                "branch_hmax_rel": branch_hmax[_i],
+                "M_r_rel": _M_r,
+                "sigma_M_r_rel": _sigma_M_r,
+                "M_sat_rel": _M_sat,
+                "sigma_M_sat_rel": _sigma_M_sat,
+                "M_0_rel": _M_0,
+                "sigma_M_0_rel": _sigma_M_0,
+                "M_0_5pt_rel": _M_0_5pt,
+                "sigma_M_0_5pt_rel": _sigma_M_0_5pt,
                 "n_tail_pos": int(_nP_pos),
                 "n_tail_neg": int(_nP_neg),
             }
@@ -1398,28 +1366,28 @@ def _(
 
     summary = pd.DataFrame.from_records(records)
     summary["M_r_norm"], summary["sigma_M_r_norm"] = normalize_01_with_sigma(
-        summary["M_r_A_per_m"].to_numpy(),
-        summary["sigma_M_r_A_per_m"].to_numpy(),
+        summary["M_r_rel"].to_numpy(),
+        summary["sigma_M_r_rel"].to_numpy(),
     )
     summary["M_sat_norm"], summary["sigma_M_sat_norm"] = normalize_01_with_sigma(
-        summary["M_sat_A_per_m"].to_numpy(),
-        summary["sigma_M_sat_A_per_m"].to_numpy(),
+        summary["M_sat_rel"].to_numpy(),
+        summary["sigma_M_sat_rel"].to_numpy(),
     )
     summary["M_0_norm"], summary["sigma_M_0_norm"] = normalize_01_with_sigma(
-        np.abs(summary["M_0_A_per_m"].to_numpy()),
-        summary["sigma_M_0_A_per_m"].to_numpy(),
+        np.abs(summary["M_0_rel"].to_numpy()),
+        summary["sigma_M_0_rel"].to_numpy(),
     )
     summary["n_tail_min"] = np.minimum(
         summary["n_tail_pos"].to_numpy(int),
         summary["n_tail_neg"].to_numpy(int),
     )
-    summary["M_0_snr"] = np.abs(summary["M_0_A_per_m"].to_numpy()) / np.maximum(
-        summary["sigma_M_0_A_per_m"].to_numpy(),
+    summary["M_0_snr"] = np.abs(summary["M_0_rel"].to_numpy()) / np.maximum(
+        summary["sigma_M_0_rel"].to_numpy(),
         1e-30,
     )
-    summary["M_0_positive"] = summary["M_0_A_per_m"] > 0
+    summary["M_0_positive"] = summary["M_0_rel"] > 0
     summary["M_0_fit_valid"] = summary["M_0_positive"] & (summary["M_0_snr"] > 3.0)
-    summary["field_fraction_of_common"] = summary["branch_hmax_A_per_m"] / common_hmax
+    summary["field_fraction_of_common"] = summary["branch_hmax_rel"] / common_hmax
 
     _T_used = summary["temperature_K"].to_numpy()
     _sT_used = summary["sigma_T_K"].to_numpy()
@@ -1430,7 +1398,7 @@ def _(
                 **transition_diagnostics(_T_used, summary["M_r_norm"].to_numpy()),
             },
             {
-                "method": rf"$M_\mathrm{{sat}}$ (H=±{H_SAT:.2f} A/m)",
+                "method": rf"$M_\mathrm{{sat}}$ ($H^*$=±{H_SAT:.2f})",
                 **transition_diagnostics(_T_used, summary["M_sat_norm"].to_numpy()),
             },
             {
@@ -1472,7 +1440,7 @@ def _(
                 "sigma_Tc_K": _stc_M_r,
             },
             {
-                "method": rf"$M_\mathrm{{sat}}$ (half-height, H=±{H_SAT:.2f} A/m)",
+                "method": rf"$M_\mathrm{{sat}}$ (half-height, $H^*$=±{H_SAT:.2f})",
                 "Tc_K": _tc_M_sat,
                 "sigma_Tc_K": _stc_M_sat,
             },
@@ -1575,9 +1543,9 @@ def _(
 
     Same local-ODR machinery as Method I but evaluated near the loop's
     saturation tips, mirroring the LabVIEW $V_y(V_{{x,\max}})$ trace.
-    We use $H_\mathrm{{sat}} = {H_SAT:.2f}\,\mathrm{{A\cdot m^{{-1}}}}$
-    ($\approx 0.98\,H_{{\max}}$ on the common branch amplitude
-    $H_{{\max}}={common_hmax:.2f}\,\mathrm{{A\cdot m^{{-1}}}}$), inboard
+    We use $H^*_\mathrm{{sat}} = {H_SAT:.2f}$ in the uncalibrated relative-axis scale
+    ($\approx 0.98\,H^*_{{\max}}$ on the common branch amplitude
+    $H^*_{{\max}}={common_hmax:.2f}$), inboard
     just enough to keep the local nearest-neighbour interpolation
     well-posed at the loop edge. This is the guide's algebraic
     Method II ("$B-H_{{\max}}=M$" at saturation, with $\alpha\to 0$).
@@ -1652,8 +1620,9 @@ def _(
     y_\mathrm{{norm}}=\frac{{y-\min(y)}}{{\max\!\left(y-\min(y)\right)}}.
     $$
 
-    Method III is *additionally* kept in absolute units $\mathrm{{A\cdot m^{{-1}}}}$
-    so $M_0(T)$ can feed the weighted $M_0^2(T)$ mean-field fit below.
+    Method III is *additionally* kept unnormalized on the same uncalibrated
+    relative-axis scale so $M_0(T)$ can feed the weighted $M_0^2(T)$ mean-field
+    check below.
 
     **Quick-look transition diagnostics** (half-height crossing and
     steepest-slope temperature, i.e. the maximum of $-dy_\mathrm{{norm}}/dT$,
@@ -1703,8 +1672,8 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, pd, summary):
     # lives in the interior of the scan.
     T_all = summary["temperature_K"].to_numpy()
     sT_all = summary["sigma_T_K"].to_numpy()
-    M0_all = summary["M_0_A_per_m"].to_numpy()
-    sM0_all = summary["sigma_M_0_A_per_m"].to_numpy()
+    M0_all = summary["M_0_rel"].to_numpy()
+    sM0_all = summary["sigma_M_0_rel"].to_numpy()
     M0_sq_all = M0_all**2
     sM0_sq_all = 2.0 * np.abs(M0_all) * sM0_all
 
@@ -1898,7 +1867,6 @@ def _(
 ):
     _data_color = BREWER["teal"]
     _fit_color = BREWER["orange"]
-    _headline_color = BREWER["purple"]
 
     fig_msq, (ax_msq, ax_msq_res) = plt.subplots(
         2,
@@ -1909,7 +1877,7 @@ def _(
         gridspec_kw={"height_ratios": [3.0, 1.0]},
     )
 
-    scale = 1e6  # (A/m)^2 -> (kA/m)^2
+    scale = 1e6  # keep values in a compact relative scale
 
     # Bound the visible region to the meaningful transition window while
     # keeping every fitted point visible.
@@ -1935,31 +1903,6 @@ def _(
     _y_hi = max(0.5, 1.08 * float(np.nanmax(np.concatenate(_y_candidates))))
     _y_lo = -0.03 * _y_hi
 
-    # Shade the fitted window in T so the reader can see at a
-    # glance which points fed the line.
-    if _T_in.size:
-        ax_msq.axvspan(
-            float(_T_in.min()),
-            float(_T_in.max()),
-            color=_data_color,
-            alpha=0.07,
-            zorder=0,
-        )
-
-    excl = ~fit_mask
-    if excl.any():
-        ax_msq.errorbar(
-            T_all[excl],
-            M0_sq_all[excl] / scale,
-            xerr=sT_all[excl],
-            yerr=sM0_sq_all[excl] / scale,
-            fmt="o",
-            color="0.6",
-            markersize=2.8,
-            elinewidth=0.6,
-            alpha=0.55,
-            label="other points",
-        )
     ax_msq.errorbar(
         T_all[fit_mask],
         M0_sq_all[fit_mask] / scale,
@@ -1970,7 +1913,7 @@ def _(
         markersize=3.6,
         elinewidth=0.8,
         alpha=0.9,
-        label=rf"selected points ($N={K_best}$)",
+        label="data",
     )
 
     ax_msq.plot(
@@ -1979,7 +1922,7 @@ def _(
         "-",
         color=_fit_color,
         linewidth=2.0,
-        label=rf"linear fit: $T_\mathrm{{c}}={Tc_K:.1f}\pm{sigma_Tc_K:.1f}\,\mathrm{{K}}$",
+        label="linear fit",
     )
 
     _residual = (
@@ -2011,21 +1954,11 @@ def _(
         ax_msq_res.set_xlim(_res_x_lo - _res_x_pad, _res_x_hi + _res_x_pad)
 
     ax_msq.axhline(0, color="0.4", linewidth=0.6, linestyle="--")
-    ax_msq.axvline(Tc_K, color=_fit_color, linewidth=0.8, linestyle=":")
-
-    if np.isfinite(Tc_headline):
-        ax_msq.axvline(
-            Tc_headline,
-            color=_headline_color,
-            linewidth=1.4,
-            linestyle="-",
-            label=rf"half-height $T_{{1/2}}={Tc_headline:.1f}\pm{sigma_Tc_headline_stat:.1f}\,\mathrm{{K}}$",
-        )
 
     ax_msq.set_xlim(_x_lo, _x_hi)
     ax_msq.set_ylim(_y_lo, _y_hi)
     ax_msq.set_xlabel(r"$T$ (K)")
-    ax_msq.set_ylabel(r"$M_0^2$ ($\mathrm{kA}^2\cdot\mathrm{m}^{-2}$)")
+    ax_msq.set_ylabel(r"$M_0^{*2}/10^6$ (relative units)")
     ax_msq.minorticks_on()
     ax_msq.grid(True, which="major", alpha=0.25)
     ax_msq.grid(True, which="minor", alpha=0.10)
@@ -2033,7 +1966,7 @@ def _(
 
     ax_msq_res.set_xlabel(r"$T$ (K)")
     ax_msq_res.set_ylabel(
-        r"$M_0^2 - f(T)$" + "\n" + r"($\mathrm{kA}^2\cdot\mathrm{m}^{-2}$)"
+        r"$[M_0^{*2} - f(T)]/10^6$" + "\n" + r"(relative units)"
     )
     ax_msq_res.minorticks_on()
     ax_msq_res.grid(True, which="major", alpha=0.25)
@@ -2120,8 +2053,8 @@ def _(
     ax_loops.axhline(0, color="0.25", linewidth=0.8)
     ax_loops.axvline(0, color="0.25", linewidth=0.8)
     ax_loops.set_xlim(-1.05 * max_abs_h, 1.05 * max_abs_h)
-    ax_loops.set_xlabel(r"$H$ (A$\cdot$m$^{-1}$)")
-    ax_loops.set_ylabel(r"$M_\mathrm{corr}$ (kA$\cdot$m$^{-1}$)")
+    ax_loops.set_xlabel(r"field proxy $H^*$ (relative units)")
+    ax_loops.set_ylabel(r"magnetization proxy $M^*_{\mathrm{corr}}/10^3$ (relative units)")
     ax_loops.set_title("background-subtracted loops")
     ax_loops.minorticks_on()
     ax_loops.grid(True, which="major", alpha=0.25)
@@ -2156,7 +2089,7 @@ def _(
             0.96,
             rf"$a={_fit_slope:.3f}$"
             + "\n"
-            + rf"rms $={_residual_rms / 1e3:.3f}\,\mathrm{{kA\cdot m^{{-1}}}}$",
+            + rf"rms $={_residual_rms / 1e3:.3f}$ rel.",
             transform=ax_pm.transAxes,
             ha="left",
             va="top",
@@ -2172,8 +2105,8 @@ def _(
     ax_pm.axhline(0, color="0.25", linewidth=0.8)
     ax_pm.axvline(0, color="0.25", linewidth=0.8)
     ax_pm.set_xlim(-1.05 * max_abs_h, 1.05 * max_abs_h)
-    ax_pm.set_xlabel(r"$H$ (A$\cdot$m$^{-1}$)")
-    ax_pm.set_ylabel(r"$M=B/\mu_0-H$ (kA$\cdot$m$^{-1}$)")
+    ax_pm.set_xlabel(r"field proxy $H^*$ (relative units)")
+    ax_pm.set_ylabel(r"magnetization proxy $M^*/10^3$ before subtraction (relative units)")
     ax_pm.set_title("high-$T$ loop before subtraction")
     ax_pm.minorticks_on()
     ax_pm.grid(True, which="major", alpha=0.25)
@@ -2191,7 +2124,6 @@ def _(
     B_PER_Y,
     DATA_FILE,
     H_PER_X,
-    H_SAT,
     Line2D,
     METHOD3_EXAMPLE_TEMPERATURE_K,
     MU0,
@@ -2202,7 +2134,6 @@ def _(
     data,
     field_ready_temperature_K,
     linear_odr_fit,
-    local_intercept_at,
     np,
     pd,
     plt,
@@ -2261,34 +2192,6 @@ def _(
     )
     _sb_pos = _fit_pos["sigma_intercept"]
     _sb_neg = _fit_neg["sigma_intercept"]
-    _M0 = 0.5 * (_b_pos_fit - _b_neg_fit)
-    _sigma_M0 = 0.5 * float(np.hypot(_sb_pos, _sb_neg))
-
-
-    _M_pos_0, _s_pos_0 = local_intercept_at(
-        _H_pos,
-        _M_pos_corr,
-        0.0,
-        h_to_m_factor=_h_to_m_factor,
-    )
-    _M_neg_0, _s_neg_0 = local_intercept_at(
-        _H_neg,
-        _M_neg_corr,
-        0.0,
-        h_to_m_factor=_h_to_m_factor,
-    )
-    _M_pos_sat, _s_pos_sat = local_intercept_at(
-        _H_pos,
-        _M_pos_corr,
-        H_SAT,
-        h_to_m_factor=_h_to_m_factor,
-    )
-    _M_neg_sat, _s_neg_sat = local_intercept_at(
-        _H_neg,
-        _M_neg_corr,
-        -H_SAT,
-        h_to_m_factor=_h_to_m_factor,
-    )
 
     _loop_files = sorted(DATA_FILE.parent.glob("HystLoop_*.txt"))
     _H_loop = None
@@ -2311,9 +2214,6 @@ def _(
         _M_loop_corr = remove_background(_H_loop, _B_loop / MU0 - _H_loop)
 
     _fit_color = BREWER["orange"]
-    _tip_color = BREWER["green"]
-    _h0_color = BREWER["purple"]
-    _nearby_color = "0.62"
 
     _H_line_pos = np.linspace(0.0, 1.03 * float(np.max(_H_pos)), 160)
     _H_line_neg = np.linspace(1.03 * float(np.min(_H_neg)), 0.0, 160)
@@ -2398,35 +2298,6 @@ def _(
 
     _ax_tail.errorbar(
         [0.0, 0.0],
-        [_M_pos_0 / 1e3, _M_neg_0 / 1e3],
-        yerr=[_s_pos_0 / 1e3, _s_neg_0 / 1e3],
-        fmt="x",
-        markersize=5.6,
-        color=_h0_color,
-        ecolor=_h0_color,
-        elinewidth=0.75,
-        capsize=2.0,
-        markeredgewidth=1.8,
-        zorder=5,
-        label="_nolegend_",
-    )
-    _ax_tail.errorbar(
-        [H_SAT / 1e3, -H_SAT / 1e3],
-        [_M_pos_sat / 1e3, _M_neg_sat / 1e3],
-        yerr=[_s_pos_sat / 1e3, _s_neg_sat / 1e3],
-        fmt="s",
-        markersize=5.8,
-        color=_tip_color,
-        ecolor=_tip_color,
-        elinewidth=0.75,
-        capsize=2.0,
-        markeredgecolor="white",
-        markeredgewidth=0.45,
-        zorder=6,
-        label="_nolegend_",
-    )
-    _ax_tail.errorbar(
-        [0.0, 0.0],
         [_b_pos_fit / 1e3, _b_neg_fit / 1e3],
         yerr=[_sb_pos / 1e3, _sb_neg / 1e3],
         fmt="o",
@@ -2441,16 +2312,18 @@ def _(
         label=r"tail intercepts $\pm1\sigma$",
     )
 
-    _h_pad = 0.07 * float(np.nanmax(np.abs(_all_H)))
-    _m_pad = 0.12 * float(np.nanmax(np.abs(_all_M)))
+    _h_pad = 0.05 * float(np.nanmax(np.abs(_all_H)))
+    _m_pad = 0.08 * float(np.nanmax(np.abs(_all_M)))
     _ax_tail.set_xlim(
         float(np.nanmin(_all_H)) - _h_pad, float(np.nanmax(_all_H)) + _h_pad
     )
     _ax_tail.set_ylim(
         float(np.nanmin(_all_M)) - _m_pad, float(np.nanmax(_all_M)) + _m_pad
     )
-    _ax_tail.set_xlabel(r"$H$ ($\mathrm{kA\cdot m^{-1}}$)")
-    _ax_tail.set_ylabel(r"$M_\mathrm{corr}=B/\mu_0-H$ ($\mathrm{kA\cdot m^{-1}}$)")
+    _ax_tail.axhline(0.0, color="0.28", linewidth=0.75, zorder=1)
+    _ax_tail.axvline(0.0, color="0.28", linewidth=0.75, zorder=1)
+    _ax_tail.set_xlabel(r"field proxy $H^*/10^3$ (relative units)")
+    _ax_tail.set_ylabel(r"magnetization proxy $M^*_{\mathrm{corr}}/10^3$ (relative units)")
     _ax_tail.minorticks_on()
     _ax_tail.grid(True, which="major", alpha=0.25)
     _ax_tail.grid(True, which="minor", alpha=0.10)
@@ -2459,33 +2332,32 @@ def _(
         Line2D(
             [0],
             [0],
-            marker="x",
+            marker="o",
             linestyle="None",
-            color=_h0_color,
-            markeredgewidth=1.8,
-            markersize=6.0,
-            label=r"method 1: $H=0$",
+            color=_fit_color,
+            markerfacecolor=_fit_color,
+            markeredgecolor="white",
+            markersize=5.0,
+            label="tail points",
         ),
         Line2D(
             [0],
             [0],
-            marker="s",
-            linestyle="None",
-            color=_tip_color,
-            markerfacecolor=_tip_color,
-            markeredgecolor="white",
-            markersize=6.0,
-            label="method 2: field edge",
+            linestyle="--",
+            color=_fit_color,
+            linewidth=2.0,
+            label="tail fit",
         ),
         Line2D(
             [0],
             [0],
             marker="o",
-            linestyle="--",
+            linestyle="None",
             color=_fit_color,
-            markersize=5.0,
-            linewidth=2.0,
-            label="method 3: tail fit",
+            markerfacecolor=_fit_color,
+            markeredgecolor="white",
+            markersize=6.0,
+            label=r"$H=0$ intercepts",
         ),
     ]
     _ax_tail.legend(
@@ -2498,7 +2370,6 @@ def _(
         handlelength=2.4,
     )
     save_figure(_fig_overview, "curie_method3_tail_example")
-
     return
 
 
@@ -2510,11 +2381,11 @@ def _(BREWER, Line2D, diagnostics, np, plt, save_figure, smooth, summary):
     sigma_T_arr = summary["sigma_T_K"].to_numpy()
     _order = np.argsort(temperature)
     series = [
-        ("M_r_norm", "sigma_M_r_norm", r"$H=0$ read", BREWER["teal"], "o", "-"),
+        ("M_r_norm", "sigma_M_r_norm", r"$M_{\mathrm{r}}$", BREWER["teal"], "o", "-"),
         (
             "M_sat_norm",
             "sigma_M_sat_norm",
-            r"field-edge read",
+            r"$M_{\mathrm{sat}}$",
             BREWER["orange"],
             "s",
             "-",
@@ -2522,7 +2393,7 @@ def _(BREWER, Line2D, diagnostics, np, plt, save_figure, smooth, summary):
         (
             "M_0_norm",
             "sigma_M_0_norm",
-            r"tail extrapolation",
+            r"$M_0$",
             BREWER["purple"],
             "^",
             "-",
@@ -2566,11 +2437,26 @@ def _(BREWER, Line2D, diagnostics, np, plt, save_figure, smooth, summary):
             )
         )
 
-    for (_, _row), (_, _, _, _color, _, _) in zip(diagnostics.iterrows(), series):
+    for (_, _row), (_, _, _, _color, _marker, _) in zip(diagnostics.iterrows(), series):
         _half_height = float(_row["half_height_K"])
         if np.isfinite(_half_height):
             ax_methods.axvline(
-                _half_height, color=_color, linestyle="--", linewidth=1.0, alpha=0.65
+                _half_height,
+                color=_color,
+                linestyle=":",
+                linewidth=0.9,
+                alpha=0.42,
+                zorder=1,
+            )
+            ax_methods.plot(
+                _half_height,
+                0.5,
+                marker=_marker,
+                markersize=6.0,
+                color=_color,
+                markerfacecolor="white",
+                markeredgewidth=1.1,
+                zorder=5,
             )
 
     _half_height_color = BREWER["rose"]
@@ -2580,6 +2466,8 @@ def _(BREWER, Line2D, diagnostics, np, plt, save_figure, smooth, summary):
     ax_methods.set_xlabel(r"$T$ (K)")
     ax_methods.set_ylabel("normalized magnetization proxy")
     ax_methods.set_ylim(-0.03, 1.03)
+    _T_pad = max(1.5, 0.025 * (float(np.nanmax(temperature)) - float(np.nanmin(temperature))))
+    ax_methods.set_xlim(float(np.nanmin(temperature)) - _T_pad, float(np.nanmax(temperature)) + _T_pad)
     ax_methods.minorticks_on()
     ax_methods.grid(True, which="major", alpha=0.25)
     ax_methods.grid(True, which="minor", alpha=0.10)
@@ -2588,10 +2476,10 @@ def _(BREWER, Line2D, diagnostics, np, plt, save_figure, smooth, summary):
         Line2D(
             [0],
             [0],
-            color="0.45",
-            linestyle="--",
-            linewidth=1.0,
-            label=r"$T_{1/2}$",
+            color=_half_height_color,
+            linestyle="-",
+            linewidth=1.1,
+            label="half height",
         ),
     )
     ax_methods.legend(handles=legend_handles, loc="upper right")
@@ -2776,15 +2664,15 @@ def _(
                 {
                     "temperature_K": float(T_K[i]),
                     "sigma_T_K": float(sT[i]),
-                    "branch_hmax_A_per_m": float(hmax[i]),
-                    "M_r_A_per_m": float(M_r),
-                    "sigma_M_r_A_per_m": float(sM_r),
-                    "M_sat_A_per_m": float(M_sat),
-                    "sigma_M_sat_A_per_m": float(sM_sat),
-                    "M_0_A_per_m": float(M0),
-                    "sigma_M_0_A_per_m": float(sM0),
-                    "M_0_5pt_A_per_m": float(M0_5pt),
-                    "sigma_M_0_5pt_A_per_m": float(sM0_5pt),
+                    "branch_hmax_rel": float(hmax[i]),
+                    "M_r_rel": float(M_r),
+                    "sigma_M_r_rel": float(sM_r),
+                    "M_sat_rel": float(M_sat),
+                    "sigma_M_sat_rel": float(sM_sat),
+                    "M_0_rel": float(M0),
+                    "sigma_M_0_rel": float(sM0),
+                    "M_0_5pt_rel": float(M0_5pt),
+                    "sigma_M_0_5pt_rel": float(sM0_5pt),
                     "n_tail_pos": int(n_pos),
                     "n_tail_neg": int(n_neg),
                     "n_tail_min": int(min(n_pos, n_neg)),
@@ -2794,20 +2682,20 @@ def _(
         run_summary = pd.DataFrame.from_records(records)
         run_summary["M_r_norm"], run_summary["sigma_M_r_norm"] = (
             normalize_01_with_sigma(
-                run_summary["M_r_A_per_m"].to_numpy(),
-                run_summary["sigma_M_r_A_per_m"].to_numpy(),
+                run_summary["M_r_rel"].to_numpy(),
+                run_summary["sigma_M_r_rel"].to_numpy(),
             )
         )
         run_summary["M_sat_norm"], run_summary["sigma_M_sat_norm"] = (
             normalize_01_with_sigma(
-                run_summary["M_sat_A_per_m"].to_numpy(),
-                run_summary["sigma_M_sat_A_per_m"].to_numpy(),
+                run_summary["M_sat_rel"].to_numpy(),
+                run_summary["sigma_M_sat_rel"].to_numpy(),
             )
         )
         run_summary["M_0_norm"], run_summary["sigma_M_0_norm"] = (
             normalize_01_with_sigma(
-                np.abs(run_summary["M_0_A_per_m"].to_numpy()),
-                run_summary["sigma_M_0_A_per_m"].to_numpy(),
+                np.abs(run_summary["M_0_rel"].to_numpy()),
+                run_summary["sigma_M_0_rel"].to_numpy(),
             )
         )
 
@@ -2834,8 +2722,8 @@ def _(
                     "Tc_K": float(tc_half),
                     "sigma_Tc_K": float(sigma_tc_half),
                     "drive_current_A_rms": float(I_rms),
-                    "H_sat_A_per_m": float(H_sat),
-                    "H_median_A_per_m": float(np.median(hmax[keep])),
+                    "H_sat_rel": float(H_sat),
+                    "H_median_rel": float(np.median(hmax[keep])),
                     "n_loops": int(len(keep)),
                     "T_min_K": float(T_K.min()),
                     "T_max_K": float(T_K.max()),
@@ -2869,8 +2757,8 @@ def _(
         Tc_half = _method_by_key.get("M_0", {}).get("Tc_K", float("nan"))
         sigma_Tc_half = _method_by_key.get("M_0", {}).get("sigma_Tc_K", float("nan"))
 
-        M0 = run_summary["M_0_A_per_m"].to_numpy()
-        sM0 = run_summary["sigma_M_0_A_per_m"].to_numpy()
+        M0 = run_summary["M_0_rel"].to_numpy()
+        sM0 = run_summary["sigma_M_0_rel"].to_numpy()
         Msq = M0**2
         sMsq = 2.0 * np.abs(M0) * sM0
         snr = np.abs(M0) / np.maximum(sM0, 1e-30)
@@ -2972,8 +2860,8 @@ def _(
                 {
                     "run": label,
                     "drive_current_A_rms": float(I_rms),
-                    "H_sat_A_per_m": float(H_sat),
-                    "H_median_A_per_m": float(np.median(hmax[keep])),
+                    "H_sat_rel": float(H_sat),
+                    "H_median_rel": float(np.median(hmax[keep])),
                     "temperature_K": float(_record["temperature_K"]),
                     "sigma_T_K": float(_record["sigma_T_K"]),
                     "M_r_norm": float(_record["M_r_norm"]),
@@ -3008,8 +2896,8 @@ def _(
                     "sigma_Tc_K", float("nan")
                 ),
                 "drive_current_A_rms": float(I_rms),
-                "H_sat_A_per_m": float(H_sat),
-                "H_median_A_per_m": float(np.median(hmax[keep])),
+                "H_sat_rel": float(H_sat),
+                "H_median_rel": float(np.median(hmax[keep])),
                 "n_fit": n_fit,
                 "n_loops": int(len(keep)),
                 "T_min_K": float(T_K.min()),
@@ -3036,24 +2924,24 @@ def _(
     cross_run = pd.DataFrame.from_records(_summary_records)
     run_curves = pd.DataFrame.from_records(_curve_records)
     run_method_tcs = pd.DataFrame.from_records(_method_records)
-    if "H_median_A_per_m" in cross_run.columns and not cross_run.empty:
+    if "H_median_rel" in cross_run.columns and not cross_run.empty:
         _series_A_h = float(
-            cross_run.loc[cross_run["run"] == "series A", "H_median_A_per_m"].iloc[0]
+            cross_run.loc[cross_run["run"] == "series A", "H_median_rel"].iloc[0]
         )
         cross_run["drive_fraction_vs_series_A"] = (
-            cross_run["H_median_A_per_m"] / _series_A_h
+            cross_run["H_median_rel"] / _series_A_h
         )
         cross_run["low_drive_flag"] = cross_run["drive_fraction_vs_series_A"] < 0.80
         if not run_curves.empty:
             run_curves["drive_fraction_vs_series_A"] = (
-                run_curves["H_median_A_per_m"] / _series_A_h
+                run_curves["H_median_rel"] / _series_A_h
             )
             run_curves["low_drive_flag"] = (
                 run_curves["drive_fraction_vs_series_A"] < 0.80
             )
         if not run_method_tcs.empty:
             run_method_tcs["drive_fraction_vs_series_A"] = (
-                run_method_tcs["H_median_A_per_m"] / _series_A_h
+                run_method_tcs["H_median_rel"] / _series_A_h
             )
             run_method_tcs["low_drive_flag"] = (
                 run_method_tcs["drive_fraction_vs_series_A"] < 0.80
@@ -3075,21 +2963,16 @@ def _(BREWER, RUN_FILES, cross_run, np, pd, plt, save_figure):
     )
 
     _all_T = []
+    _all_time = []
     for _run, _color in zip(_run_order, _colors):
         _path = RUN_FILES[_run]
         _df = pd.read_csv(_path, sep="\t")
         _time_min = _df["Time (sec)"].to_numpy(float) / 60.0
         _T = _df["Temperature (C)"].to_numpy(float) + 273.15
         _all_T.append(_T)
+        _all_time.append(_time_min)
 
-        _row = cross_run.loc[cross_run["run"] == _run]
         _label = _run.title()
-        if not _row.empty:
-            _row = _row.iloc[0]
-            _label = (
-                rf"{_label}: $I={_row['drive_current_A_rms']:.2f}\,$A, "
-                rf"$H/H_A={_row['drive_fraction_vs_series_A']:.2f}$"
-            )
         _ax_time.plot(
             _time_min,
             _T,
@@ -3117,6 +3000,13 @@ def _(BREWER, RUN_FILES, cross_run, np, pd, plt, save_figure):
 
     _ax_time.set_xlabel(r"$t$ (min)")
     _ax_time.set_ylabel(r"$T$ (K)")
+    if _all_time and _all_T:
+        _time_all = np.concatenate(_all_time)
+        _T_all_for_time = np.concatenate(_all_T)
+        _time_pad = 0.02 * (float(np.nanmax(_time_all)) - float(np.nanmin(_time_all)))
+        _T_pad = max(2.0, 0.025 * (float(np.nanmax(_T_all_for_time)) - float(np.nanmin(_T_all_for_time))))
+        _ax_time.set_xlim(float(np.nanmin(_time_all)) - _time_pad, float(np.nanmax(_time_all)) + _time_pad)
+        _ax_time.set_ylim(float(np.nanmin(_T_all_for_time)) - _T_pad, float(np.nanmax(_T_all_for_time)) + _T_pad)
     _ax_time.minorticks_on()
     _ax_time.grid(True, which="major", alpha=0.24)
     _ax_time.grid(True, which="minor", alpha=0.10)
@@ -3155,20 +3045,12 @@ def _(BREWER, RUN_FILES, cross_run, np, pd, plt, save_figure):
                 mfc="white",
                 capsize=2.5,
                 markersize=4.5,
-                label=r"mean $T_{1/2}$" if _y == _y_positions[0] else None,
+                label=r"mean $T_{1/2}$ (local $\sigma$)" if _y == _y_positions[0] else None,
             )
-        _ax_range.text(
-            _row["T_max_K"] + 4.0,
-            _y,
-            rf"$N={int(_row['n_loops'])}$",
-            va="center",
-            ha="left",
-            fontsize=8,
-            color="0.25",
-        )
 
     _T_all = np.concatenate(_all_T) if _all_T else np.array([180.0, 280.0])
-    _ax_range.set_xlim(float(np.nanmin(_T_all)) - 5.0, float(np.nanmax(_T_all)) + 22.0)
+    _range_pad = max(2.0, 0.025 * (float(np.nanmax(_T_all)) - float(np.nanmin(_T_all))))
+    _ax_range.set_xlim(float(np.nanmin(_T_all)) - _range_pad, float(np.nanmax(_T_all)) + _range_pad)
     _ax_range.set_ylim(-0.55, len(_run_order) - 0.45)
     _ax_range.set_yticks(_y_positions, [_r.title() for _r in _run_order])
     _ax_range.set_xlabel(r"$T$ (K)")
@@ -3190,7 +3072,7 @@ def _(BREWER, RUN_FILES, cross_run, np, pd, plt, save_figure):
 
 
 @app.cell
-def _(BREWER, cross_run, plt, run_curves, save_figure, smooth):
+def _(BREWER, cross_run, np, plt, run_curves, save_figure, smooth):
     # Measured counterpart to the guide's finite-field sketch. We plot the
     # near-saturation branch-split proxy because it is evaluated at the drive
     # field itself, so it is the cleanest visual comparison of the three input
@@ -3208,6 +3090,7 @@ def _(BREWER, cross_run, plt, run_curves, save_figure, smooth):
     _run_order = ["series C", "series A", "series B"]
     _colors = [BREWER["purple"], BREWER["teal"], BREWER["orange"]]
     _markers = ["^", "o", "s"]
+    _x_edges = []
 
     for _run, _color, _marker in zip(_run_order, _colors, _markers):
         _rows = run_curves.loc[run_curves["run"] == _run].sort_values("temperature_K")
@@ -3215,9 +3098,8 @@ def _(BREWER, cross_run, plt, run_curves, save_figure, smooth):
             continue
         _x = _rows["temperature_K"].to_numpy(float) / _T_ref
         _y = _rows["M_sat_norm"].to_numpy(float)
-        _h_frac = float(_rows["drive_fraction_vs_series_A"].iloc[0])
-        _current = float(_rows["drive_current_A_rms"].iloc[0])
-        _label = rf"{_run.title()}: $I={_current:.2f}\,$A, $H/H_A={_h_frac:.2f}$"
+        _x_edges.append(_x)
+        _label = _run.title()
         ax_drive.plot(
             _x,
             smooth(_y),
@@ -3239,8 +3121,15 @@ def _(BREWER, cross_run, plt, run_curves, save_figure, smooth):
     ax_drive.axhline(0.5, color="0.45", linewidth=0.8, linestyle="--", alpha=0.65)
     ax_drive.axvline(1.0, color="0.35", linewidth=0.9, linestyle=":", alpha=0.85)
     ax_drive.set_xlabel(r"$T / T_{1/2}^{\mathrm{app}}$ (series A)")
-    ax_drive.set_ylabel(r"normalized $Y(X_{\mathrm{min/max}})$")
-    ax_drive.set_xlim(0.75, 1.45)
+    ax_drive.set_ylabel(r"normalized saturation proxy $M^*_{\mathrm{sat}}$")
+    if _x_edges:
+        _x_all = np.concatenate(_x_edges)
+        _x_lo = float(np.nanmin(_x_all))
+        _x_hi = float(np.nanmax(_x_all))
+        _x_pad = max(0.015, 0.04 * (_x_hi - _x_lo))
+        ax_drive.set_xlim(_x_lo - _x_pad, _x_hi + _x_pad)
+    else:
+        ax_drive.set_xlim(0.75, 1.45)
     ax_drive.set_ylim(-0.03, 1.03)
     ax_drive.minorticks_on()
     ax_drive.grid(True, which="major", alpha=0.24)
@@ -3395,19 +3284,7 @@ def _(
                 sigma_Tc_CW = float(np.sqrt(max(0.0, _var)))
         except Exception:
             cw_result = None
-    return (
-        CW_BUFFER_K,
-        Tc_CW,
-        Tc_seed_CW,
-        b_CW,
-        chi_vals,
-        cw_result,
-        m_CW,
-        mask_CW,
-        redchi_CW,
-        sigma_Tc_CW,
-        sigma_chi_vals,
-    )
+    return Tc_CW, redchi_CW, sigma_Tc_CW
 
 
 @app.cell(hide_code=True)
@@ -3643,7 +3520,7 @@ def _(
     window gives
     $T_c^\mathrm{{CW}} = {Tc_CW:.1f}\pm{sigma_Tc_CW:.1f}\,\mathrm{{K}}$
     ($\chi^2/\nu={redchi_CW:.1f}$). A common multiplicative error in
-    the placeholder $M/H$ calibration would not move the intercept, but
+    the relative $M^*/H^*$ axis scale would not move the intercept, but
     the susceptibility scale is not independently calibrated; together with
     the large $\chi^2/\nu$, this makes the fit qualitative evidence of
     consistency rather than an independent precision $T_c$.
@@ -3813,24 +3690,24 @@ def _(
             clip_on=False,
         )
 
-    # Bound y to the region populated by point estimates. Method-IV
-    # CW's broad propagated errorbar would otherwise stretch the
-    # axis past the science region; matplotlib will draw it but clip
-    # the bar at the axis edge, which is acceptable since the legend
-    # quotes the value and the markdown reports the full number.
-    _all_centers = []
+    # Bound y to include all displayed uncertainties so cross-check
+    # error bars remain fully visible.
+    _all_intervals = []
     for _, _r in _finite_run_methods.iterrows():
-        _all_centers.append(float(_r["Tc_K"]))
+        _tc = float(_r["Tc_K"])
+        _sig = float(_r["sigma_Tc_K"]) if np.isfinite(_r["sigma_Tc_K"]) else 0.0
+        _all_intervals.extend([_tc - _sig, _tc + _sig])
     if np.isfinite(Tc_K):
-        _all_centers.append(float(Tc_K))
+        _sig = float(sigma_Tc_K) if np.isfinite(sigma_Tc_K) else 0.0
+        _all_intervals.extend([float(Tc_K) - _sig, float(Tc_K) + _sig])
     if np.isfinite(Tc_CW):
-        _all_centers.append(float(Tc_CW))
-    if _all_centers:
-        _y_lo = min(_all_centers + [Tc_headline - syst_total_all]) - 5.0
-        _high_markers = list(_all_centers)
-        if np.isfinite(Tc_K) and np.isfinite(sigma_Tc_K):
-            _high_markers.append(float(Tc_K + sigma_Tc_K))
-        _y_hi = max(_high_markers) + 5.0
+        _sig = float(sigma_Tc_CW) if np.isfinite(sigma_Tc_CW) else 0.0
+        _all_intervals.extend([float(Tc_CW) - _sig, float(Tc_CW) + _sig])
+    if np.isfinite(Tc_headline) and np.isfinite(syst_total_all):
+        _all_intervals.extend([float(Tc_headline - syst_total_all), float(Tc_headline + syst_total_all)])
+    if _all_intervals:
+        _y_lo = min(_all_intervals) - 5.0
+        _y_hi = max(_all_intervals) + 5.0
         _ax_tc.set_ylim(_y_lo, _y_hi)
 
     _ax_tc.set_xticks(_x_positions, _x_labels)

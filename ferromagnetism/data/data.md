@@ -17,7 +17,9 @@ Raw measurements from the $B$–$H$ curve and vacuum-permeability experiment.
 ## Derived quantities — peak-envelope magnetization curve (legacy sheet `virgin-curve`)
 
 `proc.py` treats the voltage columns as authoritative and recalculates the
-derived fields; any precomputed spreadsheet columns are only a legacy check.
+derived fields. The precomputed spreadsheet `H`, `B`, and `I` columns are
+legacy full-span values: they are exactly twice the peak-amplitude values used
+in the report and should not be used as processed data.
 
 The scope readings are peak-to-peak extents of the hysteresis loop, so the
 processing uses half of each recorded voltage. This gives the loop envelope,
@@ -79,6 +81,6 @@ peak-to-peak voltages, so the current amplitude inferred from the scope is
 
 $$I_\text{peak}=\frac{\Delta V_x}{2R_x}.$$
 
-Any spreadsheet `I (A)` columns are legacy derived checks and should not be
-used as authoritative processed data; in particular, they do not define the
-safety-ammeter convention.
+Any spreadsheet `I (A)` columns are legacy full-span derived values and should
+not be used as authoritative processed data; in particular, they do not define
+the safety-ammeter convention.
