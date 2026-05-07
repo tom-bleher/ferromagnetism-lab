@@ -52,26 +52,14 @@ closed magnetic path with an air gap of length $L'$ gives
 
 $$N I = H_\text{iron} \, L_\text{iron} + \frac{B \, L'}{\mu_0},$$
 
-so plotting $\Delta V_x$ against $L'$ is linear with slope
-$2R_x B / (N \mu_0)$. Solving for $\mu_0$,
-
-$$\mu_0^\text{meas} = \frac{2R_x \, \langle B \rangle}{N \cdot \mathrm{slope}(\Delta V_x,\, L')}.$$
+so plotting $NI/B$ against $L'$ is linear with slope $1/\mu_0$.
 
 Valid while the iron operates in the saturation regime
 ($H_\text{iron} L_\text{iron} \approx \text{const}$ across the sweep).
 
-`proc.py` instead fits the dimensionless ratio $r = \Delta V_x/\Delta V_y$
-against $L'$ and folds the apparatus factor $K = N^2 A / (R_x R_y C)$ in
-afterwards:
-
-$$\mu_0^\text{meas} = \frac{1}{K \cdot \mathrm{slope}(r,\, L')}.$$
-
-The two formulations agree when $\Delta V_y$ is held truly constant across
-the sweep, which the data confirm. The ratio formulation has two practical
-advantages: (a) the peak-to-peak factor of 2 cancels in the ratio, so the
-extracted $\mu_0$ is invariant under the cursor convention; (b) folding $K$
-in *after* the fit prevents the fully-correlated apparatus uncertainty from
-being diluted as $\sqrt{N}$ independent samples by ODR.
+`proc.py` fits $NI/B$ directly against $L'$ using the per-row uncertainties
+propagated from $\Delta V_x$, $\Delta V_y$, $R_x$, $R_y$, $C$, and $A$.
+The slope of this fit is reported as $1/\mu_0$.
 
 ## Current-limit convention
 

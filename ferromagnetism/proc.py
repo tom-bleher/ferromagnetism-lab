@@ -189,43 +189,103 @@ def _():
 
 
 @app.cell
-def _(BREWER, FIG_DIR, np, plt):
-    _H = np.linspace(-1.25, 1.25, 600)
-    _Hc = 0.28
-    _upper = np.tanh(3.2 * (_H + _Hc))
-    _lower = np.tanh(3.2 * (_H - _Hc))
-    _Br = float(np.tanh(3.2 * _Hc))
+def _(BREWER, FIG_DIR, np, pd, plt):
+    _loop_path = (
+        FIG_DIR.parent.parent
+        / "analysis"
+        / "curie"
+        / "data"
+        / "series A"
+        / "HystLoop_m92.341000C.txt"
+    )
+    _loop = pd.read_csv(_loop_path, sep="\t")
+    _x = _loop["X (Volt)"].to_numpy(float)
+    _y = _loop["Y (Volt)"].to_numpy(float)
 
-    _fig, _ax = plt.subplots(figsize=(5.2, 3.75), constrained_layout=True)
+    _xmin, _xmax = float(_x.min()), float(_x.max())
+    _ymin, _ymax = float(_y.min()), float(_y.max())
+    _dx, _dy = _xmax - _xmin, _ymax - _ymin
+    _xpad, _ypad = 0.10 * _dx, 0.13 * _dy
+    _xleft, _xright = _xmin - _xpad, _xmax + 0.20 * _dx
+    _ybottom, _ytop = _ymin - 0.20 * _dy, _ymax + _ypad
+
+    _fig, _ax = plt.subplots(figsize=(6.35, 3.95), constrained_layout=True)
     _loop_color = BREWER["teal"]
-    _guide_color = "0.35"
-    _ax.plot(_H, _upper, color=_loop_color, linewidth=2.1)
-    _ax.plot(_H, _lower, color=_loop_color, linewidth=2.1)
-    _ax.axhline(0.0, color="0.20", linewidth=0.85)
-    _ax.axvline(0.0, color="0.20", linewidth=0.85)
-    _ax.plot([0.0, 0.0], [0.0, _Br], color=_guide_color, linestyle="--", linewidth=0.9)
-    _ax.plot([0.0, _Hc], [0.0, 0.0], color=_guide_color, linestyle="--", linewidth=0.9)
-    _ax.scatter([0.0, _Hc], [_Br, 0.0], s=24, color=_loop_color, zorder=4)
+    _cursor_color = BREWER["orange"]
+    _axis_color = "0.25"
 
-    for _idx, _curve, _step in [(420, _upper, 26), (180, _lower, -26)]:
-        _ax.annotate(
-            "",
-            xy=(_H[_idx + _step], _curve[_idx + _step]),
-            xytext=(_H[_idx], _curve[_idx]),
-            arrowprops={"arrowstyle": "-|>", "color": _loop_color, "linewidth": 1.25},
-        )
+    _ax.plot(_x, _y, color=_loop_color, linewidth=2.2, solid_capstyle="round")
+    _ax.axhline(0.0, color=_axis_color, linewidth=0.85)
+    _ax.axvline(0.0, color=_axis_color, linewidth=0.85)
+    _ax.vlines(
+        [_xmin, _xmax],
+        _ybottom + 0.03 * _dy,
+        _ytop - 0.03 * _dy,
+        color=_cursor_color,
+        linestyle=(0, (5, 3)),
+        linewidth=1.15,
+    )
+    _ax.hlines(
+        [_ymin, _ymax],
+        _xleft + 0.025 * _dx,
+        _xright - 0.045 * _dx,
+        color=_cursor_color,
+        linestyle=(0, (5, 3)),
+        linewidth=1.15,
+    )
+    _ax.scatter(
+        [_xmin, _xmax],
+        [_ymin, _ymax],
+        s=38,
+        facecolor="white",
+        edgecolor=_loop_color,
+        linewidth=1.25,
+        zorder=4,
+    )
 
-    _ax.text(0.05, _Br + 0.04, r"$B_r$", ha="left", va="bottom", fontsize=11)
-    _ax.text(_Hc + 0.04, -0.06, r"$H_c$", ha="left", va="top", fontsize=11)
-    _ax.text(1.03, 0.90, r"$B_s$", ha="left", va="center", fontsize=11)
-    _ax.set_xlabel(r"applied field $H$")
-    _ax.set_ylabel(r"flux density $B$")
-    _ax.set_xlim(-1.28, 1.28)
-    _ax.set_ylim(-1.08, 1.08)
-    _ax.set_xticks([])
-    _ax.set_yticks([])
-    _ax.minorticks_off()
-    _ax.grid(False)
+    _arrow_y = _ymin - 0.105 * _dy
+    _arrow_x = _xmax + 0.095 * _dx
+    _ax.annotate(
+        "",
+        xy=(_xmax, _arrow_y),
+        xytext=(_xmin, _arrow_y),
+        arrowprops={"arrowstyle": "<->", "color": _cursor_color, "linewidth": 1.45},
+    )
+    _ax.annotate(
+        "",
+        xy=(_arrow_x, _ymax),
+        xytext=(_arrow_x, _ymin),
+        arrowprops={"arrowstyle": "<->", "color": _cursor_color, "linewidth": 1.45},
+    )
+    _ax.text(
+        0.5 * (_xmin + _xmax),
+        _arrow_y + 0.018 * _dy,
+        r"$\Delta V_x$",
+        ha="center",
+        va="bottom",
+        color=_cursor_color,
+        fontsize=12.5,
+        bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.88, "pad": 1.0},
+    )
+    _ax.text(
+        _arrow_x + 0.022 * _dx,
+        0.5 * (_ymin + _ymax),
+        r"$\Delta V_y$",
+        ha="left",
+        va="center",
+        rotation=90,
+        color=_cursor_color,
+        fontsize=12.5,
+        bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.88, "pad": 1.0},
+    )
+    _ax.set_xlabel(r"$V_x$ (V)")
+    _ax.set_ylabel(r"$V_y$ (V)", labelpad=12)
+    _ax.set_xlim(_xleft, _xright)
+    _ax.set_ylim(_ybottom, _ytop)
+    _ax.minorticks_on()
+    _ax.grid(True, which="major", alpha=0.22)
+    _ax.grid(True, which="minor", alpha=0.08)
+
     _fig.savefig(FIG_DIR / "hysteresis_schematic.pdf", bbox_inches="tight", dpi=600)
     plt.close(_fig)
     return
@@ -546,10 +606,8 @@ def _(mo):
 
 @app.cell
 def _(
-    A,
     BREWER,
     B_per_Vy,
-    C,
     DATA_XLSX,
     H_per_Vx,
     L,
@@ -558,7 +616,6 @@ def _(
     N,
     PhysicalSize,
     Rx,
-    Ry,
     fit_functions,
     fmt,
     mo,
@@ -572,10 +629,7 @@ def _(
     unp,
 ):
     def fit_gap(sheet):
-        r"""Weighted :math:`V_x/V_y` fit vs :math:`L'`; fold :math:`K=N^2A/(R_xR_yC)`
-        in after the fit so apparatus σ doesn't dilute by :math:`\sqrt{N}`.
-        :math:`\mu_0 = 1/(K \cdot \text{slope})`.
-        """
+        r"""Weighted fit of :math:`NI/B` vs :math:`L'`."""
         raw = read_table(DATA_XLSX, sheet_name=sheet)
         # Keep only rows whose plate count parses as a number; a blank row
         # then a text summary block follows the data.
@@ -588,23 +642,18 @@ def _(
         Vx, Vy = df["dVx"].to_numpy(), df["dVy"].to_numpy()
         sVx, sVy = u_V(Vx), u_V(Vy)
 
-        r_vals = Vx / Vy
-        sr = r_vals * np.sqrt((sVx / Vx) ** 2 + (sVy / Vy) ** 2)
+        Vx_u = unp.uarray(Vx, sVx)
+        Vy_u = unp.uarray(Vy, sVy)
+        B_u = B_per_Vy * Vy_u
+        NI_B = N * Vx_u / (2 * Rx) / B_u
+        y_vals = unp.nominal_values(NI_B)
+        sy_vals = unp.std_devs(NI_B)
 
         x, sx = Lp, np.full_like(Lp, u_Lp)
-        result = odr_fit(fit_functions.linear, None, x, sx, r_vals, sr)
+        result = odr_fit(fit_functions.linear, None, x, sx, y_vals, sy_vals)
 
-        # Each apparatus ufloat keeps its tag, so K's factors stay
-        # correctly correlated through the product.
-        K = (N**2) * A / (Rx * Ry * C)
-        K_nom = K.n
-        slope = PhysicalSize.from_ufloat(K * result.param(1).to_ufloat())
-        intercept = PhysicalSize.from_ufloat(K * result.param(0).to_ufloat())
-
-        # I_peak = ΔV_x/(2 Rx); B = B_per_Vy · ΔV_y.  The 1/2 cancels in
-        # NI/B (μ₀ invariant), but plotted y-values must match the fit line.
-        B_u = B_per_Vy * unp.uarray(Vy, sVy)
-        NI_B = N * unp.uarray(Vx, sVx) / (2 * Rx) / B_u
+        slope = PhysicalSize.from_ufloat(result.param(1).to_ufloat())
+        intercept = PhysicalSize.from_ufloat(result.param(0).to_ufloat())
 
         return dict(
             result=result,
@@ -612,10 +661,8 @@ def _(
             intercept=intercept,
             mu0_exp=1.0 / slope,
             mu_iron=L / intercept,
-            y_full=unp.nominal_values(NI_B),
-            sy_full=unp.std_devs(NI_B),
-            y_fit=K_nom * r_vals,
-            sy_fit=K_nom * sr,
+            y_fit=y_vals,
+            sy_fit=sy_vals,
             x=x,
             sx=sx,
             B_mean=np.mean(unp.nominal_values(B_u)),
@@ -785,8 +832,8 @@ def _(FIG_DIR, RUNS, fits, np, plt):
 
 @app.cell(hide_code=True)
 def _(MU0_THEO, RUNS, fits, mo):
-    # μ_0 scale check. The experimental result μ_0^exp = 1/(K·slope),
-    # with K = N²A/(R_x R_y C). The log-derivatives are exact:
+    # μ_0 scale check. The direct fit uses NI/B =
+    # (N²A/(R_x R_y C))·(ΔV_x/ΔV_y), so the log-derivatives are exact:
     #
     #   d ln μ_0 / d ln N   = -2     d ln μ_0 / d ln R_x = +1
     #   d ln μ_0 / d ln A   = -1     d ln μ_0 / d ln R_y = +1

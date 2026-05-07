@@ -391,10 +391,8 @@ def _(
             color=threshold_color,
             linestyle=(0, (5.0, 2.2)),
             linewidth=0.95,
-            label=r"0.98 cut",
         )
 
-        discarded_labeled = False
         _T_edges = []
         _ratio_edges = []
         for run in data_prep_runs:
@@ -414,9 +412,7 @@ def _(
                 color=discarded_color,
                 alpha=0.42,
                 edgecolor="none",
-                label="discarded" if not discarded_labeled else None,
             )
-            discarded_labeled = True
             ax.plot(T[after], ratio[after], color=run["color"], linewidth=1.25, alpha=0.72)
             ax.scatter(
                 T[after],
@@ -425,7 +421,6 @@ def _(
                 color=run["color"],
                 alpha=0.82,
                 edgecolor="none",
-                label=run["label"],
             )
             ax.scatter(
                 T[ready_idx],
@@ -454,7 +449,62 @@ def _(
         ax.minorticks_on()
         ax.grid(True, which="major", alpha=0.24)
         ax.grid(True, which="minor", alpha=0.10)
-        ax.legend(loc="lower right", ncol=2, fontsize=7.8, framealpha=0.94)
+        legend_handles = [
+            Line2D(
+                [0],
+                [0],
+                color=plateau_color,
+                linewidth=1.1,
+                alpha=0.85,
+                label="field plateau (1.00)",
+            ),
+            Line2D(
+                [0],
+                [0],
+                color=threshold_color,
+                linestyle=(0, (5.0, 2.2)),
+                linewidth=1.0,
+                label="field-ready cut (0.98)",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="None",
+                markersize=4.2,
+                markerfacecolor=discarded_color,
+                markeredgecolor="none",
+                alpha=0.42,
+                label="discarded loops",
+            ),
+        ]
+        legend_handles.extend(
+            Line2D(
+                [0],
+                [0],
+                color=run["color"],
+                linewidth=1.25,
+                alpha=0.72,
+                marker="o",
+                markersize=4.4,
+                markerfacecolor=run["color"],
+                markeredgecolor="none",
+                label=run["label"],
+            )
+            for run in data_prep_runs
+        )
+        ax.legend(
+            handles=legend_handles,
+            loc="lower right",
+            ncol=2,
+            fontsize=7.4,
+            framealpha=0.95,
+            borderpad=0.45,
+            labelspacing=0.4,
+            handlelength=2.2,
+            handletextpad=0.65,
+            columnspacing=1.15,
+        )
         _save_data_prep_figure(fig, "curie_data_preparation_cuts")
         plt.close(fig)
 
@@ -676,26 +726,14 @@ def _(
     # Curie LabVIEW files are scope-voltage samples, not manual cursor reads.
     # The HystLoop exports show sub-mV digitization steps, while the wide
     # CurieData tables are interpolated/printed more finely than the acquisition
-    # resolution. Use the observed high-drive quantization as a
-    # digitization term and add the oscilloscope/LabVIEW RMS acquisition noise
-    # floor in quadrature for ODR point weights.
+    # resolution. Use the observed high-drive quantization as the
+    # digitization term for ODR point weights.
     CURIE_DIGITIZATION_STEP_X_V = 0.6e-3
     CURIE_DIGITIZATION_STEP_Y_V = 0.4e-3
     CURIE_DIGITIZATION_SIGMA_X_V = CURIE_DIGITIZATION_STEP_X_V / np.sqrt(12.0)
     CURIE_DIGITIZATION_SIGMA_Y_V = CURIE_DIGITIZATION_STEP_Y_V / np.sqrt(12.0)
-    CURIE_SCOPE_NOISE_SIGMA_V = 1.0e-3
-    CURIE_SAMPLE_SIGMA_X_V = float(
-        np.hypot(
-            CURIE_DIGITIZATION_SIGMA_X_V,
-            CURIE_SCOPE_NOISE_SIGMA_V,
-        )
-    )
-    CURIE_SAMPLE_SIGMA_Y_V = float(
-        np.hypot(
-            CURIE_DIGITIZATION_SIGMA_Y_V,
-            CURIE_SCOPE_NOISE_SIGMA_V,
-        )
-    )
+    CURIE_SAMPLE_SIGMA_X_V = float(CURIE_DIGITIZATION_SIGMA_X_V)
+    CURIE_SAMPLE_SIGMA_Y_V = float(CURIE_DIGITIZATION_SIGMA_Y_V)
 
     def branches_for_row(row):
         H_pos = H_PER_X * row[X_POS].to_numpy(float)
@@ -2124,15 +2162,17 @@ def _(
     B_PER_Y,
     DATA_FILE,
     H_PER_X,
+    H_SAT,
     Line2D,
     METHOD3_EXAMPLE_TEMPERATURE_K,
     MU0,
     TEMPERATURE_K,
+    background_intercept,
     background_slope,
-    branch_point_sigmas,
     branches_for_row,
     data,
     field_ready_temperature_K,
+    local_intercept_at,
     linear_odr_fit,
     np,
     pd,
@@ -2158,6 +2198,47 @@ def _(
     _M_pos_corr = remove_background(_H_pos, _M_pos)
     _M_neg_corr = remove_background(_H_neg, _M_neg)
     _h_to_m_factor = 1.0 + background_slope
+    _b_over_mu0_per_y = B_PER_Y / MU0
+
+    def _to_vx(_H):
+        return np.asarray(_H, dtype=float) / H_PER_X
+
+    def _to_vy(_H, _M_corr):
+        return (
+            np.asarray(_M_corr, dtype=float)
+            + _h_to_m_factor * np.asarray(_H, dtype=float)
+            + background_intercept
+        ) / _b_over_mu0_per_y
+
+    _M_pos_0, _ = local_intercept_at(
+        _H_pos,
+        _M_pos_corr,
+        0.0,
+        h_to_m_factor=_h_to_m_factor,
+    )
+    _M_neg_0, _ = local_intercept_at(
+        _H_neg,
+        _M_neg_corr,
+        0.0,
+        h_to_m_factor=_h_to_m_factor,
+    )
+    _M_pos_sat, _ = local_intercept_at(
+        _H_pos,
+        _M_pos_corr,
+        H_SAT,
+        h_to_m_factor=_h_to_m_factor,
+    )
+    _M_neg_sat, _ = local_intercept_at(
+        _H_neg,
+        _M_neg_corr,
+        -H_SAT,
+        h_to_m_factor=_h_to_m_factor,
+    )
+
+    _H_method1 = np.array([0.0, 0.0])
+    _M_method1 = np.array([_M_pos_0, _M_neg_0])
+    _H_method2 = np.array([H_SAT, -H_SAT])
+    _M_method2 = np.array([_M_pos_sat, _M_neg_sat])
 
     _b_pos, _sb_pos, _n_pos = sat_intercept_plateau(
         _H_pos,
@@ -2194,8 +2275,8 @@ def _(
     _sb_neg = _fit_neg["sigma_intercept"]
 
     _loop_files = sorted(DATA_FILE.parent.glob("HystLoop_*.txt"))
-    _H_loop = None
-    _M_loop_corr = None
+    _X_loop = None
+    _Y_loop = None
     if _loop_files:
 
         def _loop_temperature_from_path(_path):
@@ -2209,126 +2290,314 @@ def _(
             int(np.argmin(np.abs(_loop_temperatures_C - _example_T_C)))
         ]
         _loop = pd.read_csv(_loop_path, sep="\t")
-        _H_loop = H_PER_X * _loop["X (Volt)"].to_numpy(float)
-        _B_loop = B_PER_Y * _loop["Y (Volt)"].to_numpy(float)
-        _M_loop_corr = remove_background(_H_loop, _B_loop / MU0 - _H_loop)
+        _X_loop = _loop["X (Volt)"].to_numpy(float)
+        _Y_loop = _loop["Y (Volt)"].to_numpy(float)
 
     _fit_color = BREWER["orange"]
+    _method1_color = BREWER["teal"]
+    _method2_color = BREWER["purple"]
 
     _H_line_pos = np.linspace(0.0, 1.03 * float(np.max(_H_pos)), 160)
     _H_line_neg = np.linspace(1.03 * float(np.min(_H_neg)), 0.0, 160)
-    _all_H = np.concatenate([_H_pos, _H_neg]) / 1e3
-    _all_M = (
-        np.concatenate(
-            [
-                _M_pos_corr,
-                _M_neg_corr,
-                [
-                    _b_pos_fit - _sb_pos,
-                    _b_pos_fit + _sb_pos,
-                    _b_neg_fit - _sb_neg,
-                    _b_neg_fit + _sb_neg,
-                ],
-            ]
-        )
-        / 1e3
-    )
-
-    _fig_overview, _ax_tail = plt.subplots(figsize=(7.4, 4.9), constrained_layout=True)
-    if _H_loop is not None:
-        _ax_tail.plot(
-            _H_loop / 1e3,
-            _M_loop_corr / 1e3,
-            color="0.78",
-            linewidth=1.1,
-            label="measured loop",
-        )
-
-    _sx_pos_tail, _sy_pos_tail = branch_point_sigmas(
-        _H_pos_tail,
-        h_to_m_factor=_h_to_m_factor,
-    )
-    _sx_neg_tail, _sy_neg_tail = branch_point_sigmas(
-        _H_neg_tail,
-        h_to_m_factor=_h_to_m_factor,
-    )
-    _ax_tail.errorbar(
-        _H_neg_tail / 1e3,
-        _M_neg_tail / 1e3,
-        xerr=_sx_neg_tail / 1e3,
-        yerr=_sy_neg_tail / 1e3,
-        fmt="o",
-        color=_fit_color,
-        ecolor=_fit_color,
-        markersize=3.4,
-        elinewidth=0.45,
-        capsize=1.2,
-        label=r"selected tails $\pm1\sigma$",
-    )
-    _ax_tail.errorbar(
-        _H_pos_tail / 1e3,
-        _M_pos_tail / 1e3,
-        xerr=_sx_pos_tail / 1e3,
-        yerr=_sy_pos_tail / 1e3,
-        fmt="o",
-        color=_fit_color,
-        ecolor=_fit_color,
-        markersize=3.4,
-        elinewidth=0.45,
-        capsize=1.2,
-    )
-
     _M_line_pos = _a_pos * _H_line_pos + _b_pos_fit
     _M_line_neg = _a_neg * _H_line_neg + _b_neg_fit
-    _ax_tail.plot(
-        _H_line_pos / 1e3,
-        _M_line_pos / 1e3,
+
+    _all_x_parts = [_to_vx(_H_pos), _to_vx(_H_neg)]
+    _all_y_parts = [
+        _to_vy(_H_pos, _M_pos_corr),
+        _to_vy(_H_neg, _M_neg_corr),
+        _to_vy(_H_method1, _M_method1),
+        _to_vy(_H_method2, _M_method2),
+        _to_vy([0.0, 0.0], [_b_pos_fit, _b_neg_fit]),
+    ]
+    if _X_loop is not None:
+        _all_x_parts.append(_X_loop)
+        _all_y_parts.append(_Y_loop)
+    _all_X = np.concatenate(_all_x_parts)
+    _all_Y = np.concatenate(_all_y_parts)
+    _x_span = float(np.nanmax(_all_X) - np.nanmin(_all_X))
+    _y_span = float(np.nanmax(_all_Y) - np.nanmin(_all_Y))
+    _x_pad = 0.05 * _x_span
+    _y_pad = 0.08 * _y_span
+
+    _label_box = dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.86)
+    _fig_overview, _ax_tail = plt.subplots(figsize=(8.0, 5.1), constrained_layout=True)
+    if _X_loop is not None:
+        _ax_tail.plot(
+            _X_loop,
+            _Y_loop,
+            color="0.62",
+            linewidth=1.45,
+            alpha=0.82,
+            label="scope loop",
+        )
+    else:
+        _ax_tail.plot(
+            _to_vx(_H_pos),
+            _to_vy(_H_pos, _M_pos_corr),
+            color="0.62",
+            linewidth=1.45,
+            alpha=0.82,
+            label="scope loop",
+        )
+        _ax_tail.plot(
+            _to_vx(_H_neg),
+            _to_vy(_H_neg, _M_neg_corr),
+            color="0.62",
+            linewidth=1.45,
+            alpha=0.82,
+        )
+
+    _ax_tail.scatter(
+        _to_vx(_H_method1),
+        _to_vy(_H_method1, _M_method1),
+        marker="D",
+        s=62,
+        color=_method1_color,
+        edgecolor="white",
+        linewidth=0.75,
+        zorder=8,
+        label=r"I: $M_r$",
+    )
+    _method1_y = _to_vy(_H_method1, _M_method1)
+    _method1_x = -0.085 * _x_span
+    for _y in _method1_y:
+        _ax_tail.plot(
+            [0.0, _method1_x],
+            [float(_y), float(_y)],
+            color=_method1_color,
+            linewidth=0.8,
+            alpha=0.72,
+            zorder=6,
+        )
+    _ax_tail.annotate(
+        "",
+        xy=(_method1_x, float(np.max(_method1_y))),
+        xytext=(_method1_x, float(np.min(_method1_y))),
+        arrowprops=dict(arrowstyle="<->", color=_method1_color, linewidth=1.45),
+        zorder=6,
+    )
+    _ax_tail.text(
+        _method1_x - 0.012 * _x_span,
+        float(np.mean(_method1_y)),
+        r"I: $M_r$",
+        color=_method1_color,
+        fontsize=12.0,
+        va="center",
+        ha="right",
+        bbox=_label_box,
+    )
+
+    _ax_tail.axvline(
+        _to_vx(H_SAT),
+        color=_method2_color,
+        linewidth=1.05,
+        linestyle=":",
+        alpha=0.62,
+    )
+    _ax_tail.axvline(
+        _to_vx(-H_SAT),
+        color=_method2_color,
+        linewidth=1.05,
+        linestyle=":",
+        alpha=0.62,
+    )
+    _ax_tail.scatter(
+        _to_vx(_H_method2),
+        _to_vy(_H_method2, _M_method2),
+        marker="s",
+        s=64,
+        color=_method2_color,
+        edgecolor="white",
+        linewidth=0.75,
+        zorder=8,
+        label=r"II: $M_{\mathrm{sat}}$",
+    )
+    _method2_xy = (
+        float(_to_vx(-H_SAT)),
+        float(np.min(_to_vy(_H_method2, _M_method2))),
+    )
+    _ax_tail.annotate(
+        r"II: $M_{\mathrm{sat}}$",
+        xy=_method2_xy,
+        xytext=(_method2_xy[0] + 0.08 * _x_span, _method2_xy[1] + 0.15 * _y_span),
+        color=_method2_color,
+        fontsize=12.0,
+        ha="left",
+        va="bottom",
+        bbox=_label_box,
+        arrowprops=dict(arrowstyle="->", color=_method2_color, linewidth=1.05),
+        zorder=9,
+    )
+
+    _ax_tail.scatter(
+        _to_vx(_H_neg_tail),
+        _to_vy(_H_neg_tail, _M_neg_tail),
+        marker="o",
+        s=19,
         color=_fit_color,
-        linewidth=2.0,
+        edgecolor=_fit_color,
+        linewidth=0.35,
+        alpha=0.86,
+        zorder=5,
+        label="III tail points",
+    )
+    _ax_tail.scatter(
+        _to_vx(_H_pos_tail),
+        _to_vy(_H_pos_tail, _M_pos_tail),
+        marker="o",
+        s=19,
+        color=_fit_color,
+        edgecolor=_fit_color,
+        linewidth=0.35,
+        alpha=0.86,
+        zorder=5,
+    )
+
+    _ax_tail.plot(
+        _to_vx(_H_line_pos),
+        _to_vy(_H_line_pos, _M_line_pos),
+        color=_fit_color,
+        linewidth=2.35,
         linestyle="--",
-        label=r"tail fits to $H=0$",
+        label=r"III tail fits to $V_x=0$",
     )
     _ax_tail.plot(
-        _H_line_neg / 1e3,
-        _M_line_neg / 1e3,
+        _to_vx(_H_line_neg),
+        _to_vy(_H_line_neg, _M_line_neg),
         color=_fit_color,
-        linewidth=2.0,
+        linewidth=2.35,
         linestyle="--",
     )
 
     _ax_tail.errorbar(
         [0.0, 0.0],
-        [_b_pos_fit / 1e3, _b_neg_fit / 1e3],
-        yerr=[_sb_pos / 1e3, _sb_neg / 1e3],
+        _to_vy([0.0, 0.0], [_b_pos_fit, _b_neg_fit]),
+        yerr=[_sb_pos / abs(_b_over_mu0_per_y), _sb_neg / abs(_b_over_mu0_per_y)],
         fmt="o",
-        markersize=5.8,
+        markersize=7.2,
         color=_fit_color,
         ecolor=_fit_color,
-        elinewidth=0.75,
-        capsize=2.0,
+        elinewidth=1.0,
+        capsize=2.4,
         markeredgecolor="white",
-        markeredgewidth=0.45,
-        zorder=7,
-        label=r"tail intercepts $\pm1\sigma$",
+        markeredgewidth=0.7,
+        zorder=9,
+        label=r"III $V_x=0$ intercepts",
     )
 
-    _h_pad = 0.05 * float(np.nanmax(np.abs(_all_H)))
-    _m_pad = 0.08 * float(np.nanmax(np.abs(_all_M)))
     _ax_tail.set_xlim(
-        float(np.nanmin(_all_H)) - _h_pad, float(np.nanmax(_all_H)) + _h_pad
+        float(np.nanmin(_all_X)) - _x_pad, float(np.nanmax(_all_X)) + _x_pad
     )
     _ax_tail.set_ylim(
-        float(np.nanmin(_all_M)) - _m_pad, float(np.nanmax(_all_M)) + _m_pad
+        float(np.nanmin(_all_Y)) - _y_pad, float(np.nanmax(_all_Y)) + _y_pad
     )
+    _tail_intercept_y = _to_vy([0.0, 0.0], [_b_pos_fit, _b_neg_fit])
+    _ax_tail.annotate(
+        r"III: $M_0$",
+        xy=(0.0, float(np.max(_tail_intercept_y))),
+        xytext=(0.045 * _x_span, float(np.max(_tail_intercept_y)) + 0.07 * _y_span),
+        color=_fit_color,
+        fontsize=12.0,
+        ha="left",
+        va="bottom",
+        bbox=_label_box,
+        arrowprops=dict(arrowstyle="->", color=_fit_color, linewidth=1.05),
+        zorder=9,
+    )
+
     _ax_tail.axhline(0.0, color="0.28", linewidth=0.75, zorder=1)
     _ax_tail.axvline(0.0, color="0.28", linewidth=0.75, zorder=1)
-    _ax_tail.set_xlabel(r"field proxy $H^*/10^3$ (relative units)")
-    _ax_tail.set_ylabel(r"magnetization proxy $M^*_{\mathrm{corr}}/10^3$ (relative units)")
+    _ax_tail.set_xlabel(r"scope channel $V_x$ (V)", fontsize=13.0)
+    _ax_tail.set_ylabel(r"scope channel $V_y$ (V)", fontsize=13.0)
+    _ax_tail.tick_params(axis="both", which="major", labelsize=11.0)
     _ax_tail.minorticks_on()
-    _ax_tail.grid(True, which="major", alpha=0.25)
-    _ax_tail.grid(True, which="minor", alpha=0.10)
+    _ax_tail.grid(True, which="major", alpha=0.17)
+    _ax_tail.grid(False, which="minor")
+
+    _ax_inset = _ax_tail.inset_axes([0.58, 0.12, 0.37, 0.31])
+    _x_tail_pos = _to_vx(_H_pos_tail)
+    _y_tail_pos = _to_vy(_H_pos_tail, _M_pos_tail)
+    _x_line_pos = _to_vx(_H_line_pos)
+    _y_line_pos = _to_vy(_H_line_pos, _M_line_pos)
+    _x_zoom_pad = max(0.012, 0.14 * float(np.ptp(_x_tail_pos)))
+    _x_zoom_min = float(np.min(_x_tail_pos)) - _x_zoom_pad
+    _x_zoom_max = float(np.max(_x_tail_pos)) + _x_zoom_pad
+    _line_zoom = (_x_line_pos >= _x_zoom_min) & (_x_line_pos <= _x_zoom_max)
+    _y_zoom_values = np.concatenate([_y_tail_pos, _y_line_pos[_line_zoom]])
+    _y_zoom_pad = max(0.006, 0.24 * float(np.ptp(_y_zoom_values)))
+
+    _ax_inset.plot(
+        _to_vx(_H_pos),
+        _to_vy(_H_pos, _M_pos_corr),
+        color="0.72",
+        linewidth=1.0,
+        alpha=0.72,
+    )
+    _ax_inset.plot(
+        _x_line_pos,
+        _y_line_pos,
+        color=_fit_color,
+        linewidth=2.0,
+        linestyle="--",
+    )
+    _ax_inset.scatter(
+        _x_tail_pos,
+        _y_tail_pos,
+        s=10,
+        color=_fit_color,
+        edgecolor="white",
+        linewidth=0.18,
+        alpha=0.82,
+        zorder=4,
+    )
+    _ax_inset.set_xlim(_x_zoom_min, _x_zoom_max)
+    _ax_inset.set_ylim(
+        float(np.min(_y_zoom_values)) - _y_zoom_pad,
+        float(np.max(_y_zoom_values)) + _y_zoom_pad,
+    )
+    _ax_inset.set_xlabel(r"$V_x$ (V)", fontsize=8.8, labelpad=1.0)
+    _ax_inset.set_ylabel(r"$V_y$ (V)", fontsize=8.8, labelpad=1.0)
+    _ax_inset.tick_params(axis="both", which="both", labelsize=8.0, pad=1.0)
+    _ax_inset.grid(True, which="major", alpha=0.18)
+    _ax_inset.minorticks_on()
+    _ax_inset.grid(False, which="minor")
+    _ax_inset.set_facecolor("white")
+    for _spine in _ax_inset.spines.values():
+        _spine.set_edgecolor("0.42")
+        _spine.set_linewidth(0.75)
+    _ax_tail.indicate_inset_zoom(
+        _ax_inset,
+        edgecolor="0.35",
+        linewidth=0.85,
+        alpha=0.62,
+        linestyle="-",
+    )
+
     _method_handles = [
-        Line2D([0], [0], color="0.72", linewidth=1.4, label="measured loop"),
+        Line2D([0], [0], color="0.62", linewidth=1.6, label="scope loop"),
+        Line2D(
+            [0],
+            [0],
+            marker="D",
+            linestyle="None",
+            color=_method1_color,
+            markerfacecolor=_method1_color,
+            markeredgecolor="white",
+            markersize=5.8,
+            label=r"I: $M_r$ at $V_x=0$",
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="s",
+            linestyle="None",
+            color=_method2_color,
+            markerfacecolor=_method2_color,
+            markeredgecolor="white",
+            markersize=6.0,
+            label=r"II: $M_{\mathrm{sat}}$ at $\pm V_{x,\mathrm{sat}}$",
+        ),
         Line2D(
             [0],
             [0],
@@ -2338,15 +2607,15 @@ def _(
             markerfacecolor=_fit_color,
             markeredgecolor="white",
             markersize=5.0,
-            label="tail points",
+            label="III tail points",
         ),
         Line2D(
             [0],
             [0],
             linestyle="--",
             color=_fit_color,
-            linewidth=2.0,
-            label="tail fit",
+            linewidth=2.35,
+            label="III tail fit",
         ),
         Line2D(
             [0],
@@ -2357,17 +2626,17 @@ def _(
             markerfacecolor=_fit_color,
             markeredgecolor="white",
             markersize=6.0,
-            label=r"$H=0$ intercepts",
+            label=r"III $V_x=0$ intercepts",
         ),
     ]
     _ax_tail.legend(
         handles=_method_handles,
-        loc="lower right",
-        fontsize=7.6,
+        loc="upper left",
+        fontsize=8.6,
         framealpha=0.94,
         borderpad=0.45,
-        labelspacing=0.35,
-        handlelength=2.4,
+        labelspacing=0.32,
+        handlelength=2.2,
     )
     save_figure(_fig_overview, "curie_method3_tail_example")
     return
