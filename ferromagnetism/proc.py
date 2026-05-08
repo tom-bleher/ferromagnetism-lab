@@ -259,10 +259,10 @@ def _(BREWER, FIG_DIR, np, pd, plt):
     )
     _ax.text(
         0.5 * (_xmin + _xmax),
-        _arrow_y + 0.018 * _dy,
+        _arrow_y - 0.018 * _dy,
         r"$\Delta V_x$",
         ha="center",
-        va="bottom",
+        va="top",
         color=_cursor_color,
         fontsize=12.5,
         bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.88, "pad": 1.0},
@@ -273,7 +273,6 @@ def _(BREWER, FIG_DIR, np, pd, plt):
         r"$\Delta V_y$",
         ha="left",
         va="center",
-        rotation=90,
         color=_cursor_color,
         fontsize=12.5,
         bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.88, "pad": 1.0},

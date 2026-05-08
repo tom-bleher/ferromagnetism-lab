@@ -31,17 +31,18 @@ def _(mo):
       branches give $\pm$ the proxy by symmetry, so the half-difference
       cancels any DC offset on $V_y$. The three methods differ only in
       the evaluation field and the fitting procedure:
-        1. **Method I** — $M_r(T)$, branches at $H=0$. The remanence;
+        1. **Method I** — $M_0(T)$, branches at $H=0$. The zero-field loop opening;
            same quantity as the LabVIEW realtime trace $V_y(V_x{=}0)$.
         2. **Method II** — $M_{\mathrm{sat}}(T)$, branches at $H=\pm H_{\mathrm{sat}}$
            (field-edge/saturation-tip metric). Same quantity as the LabVIEW realtime
            trace $V_y(V_x{=}V_{x,\max})$.
-        3. **Method III** — $M_0(T)$, the same single loop's saturation
+        3. **Method III** — $M_0^{\mathrm{ext}}(T)$, the same single loop's saturation
            tail fitted with ODR and *extrapolated back to $H=0$*. This
            is the guide's algebraic Method III, written in SI as
-           "$B/\mu_0-(\alpha+1)H=M_0$"; the spontaneous magnetization.
+           "$B/\mu_0-(\alpha+1)H=M_0^{\mathrm{ext}}$"; the extrapolated
+           zero-field magnetization proxy.
     - chain Method III into a weighted mean-field fit
-      the relative-coordinate $M_0^2(T)\propto T_c-T$ trend to extract $T_c\pm\sigma_{T_c}$.
+      the relative-coordinate $[M_0^{\mathrm{ext}}]^2(T)\propto T_c-T$ trend to extract $T_c\pm\sigma_{T_c}$.
 
     The calibration relations used are
 
@@ -64,7 +65,7 @@ def _(mo):
 
     The half-height crossings are local derived quantities, not fitted physical
     models. The two cross-check models in this notebook are the weighted line
-    fits of $M_0^2(T)$ and apparent Curie--Weiss $1/\chi_{\mathrm{M}}(T)$; both report fit
+    fits of $[M_0^{\mathrm{ext}}]^2(T)$ and apparent Curie--Weiss $1/\chi_{\mathrm{M}}(T)$; both report fit
     parameters, relative errors, $\chi^2/\nu$, p-value, DOF, and
     data-minus-fit panels.
     """)
@@ -257,7 +258,7 @@ def _(np, plt, save_figure):
         bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.82, "pad": 1.0},
     )
     _ax.set_xlabel(r"$T$")
-    _ax.set_ylabel(r"$M/M_{\mathrm{sat}}$")
+    _ax.set_ylabel(r"$\tilde M$")
     _ax.set_xlim(0.0, 2.25)
     _ax.set_ylim(-0.02, 1.04)
     _ax.minorticks_on()
@@ -1054,7 +1055,7 @@ def _(
         h_to_m_factor=1.0,
     ):
         # Pick the saturation-tail window with two literature-grounded gates:
-        #   (i)  near-saturation pre-cut |M| >= frac * |M_0_seed|, where the
+        #   (i)  near-saturation pre-cut |M| >= frac * |M0_ext_seed|, where the
         #        seed comes from the guide's strict n_min-point linear fit
         #        (the standard "M >= 0.95 M_s" near-saturation rule);
         #   (ii) slope-stability plateau: starting from the outermost point
@@ -1152,7 +1153,6 @@ def _(
         TEMPERATURE_C,
         TEMPERATURE_K,
         TIME_S,
-        branch_point_sigmas,
         branches_for_row,
         half_height_tc_with_sigma,
         linear_odr_fit,
@@ -1270,7 +1270,7 @@ def _(
         _M_pos_corr = remove_background(_H_pos, _M_pos)
         _M_neg_corr = remove_background(_H_neg, _M_neg)
 
-        # Method I: M_r(T) ≡ ½ |M_+(T, H=0) − M_-(T, H=0)|.
+        # Method I: M_0(T) ≡ ½ |M_+(T, H=0) − M_-(T, H=0)|.
         # Local ODR line to M(H) at H=0 on each branch gives both the
         # intercept (M_±(T, 0)) and a per-loop 1-sigma from residuals.
         _M_pos_0, _s_pos_0 = local_intercept_at(
@@ -1309,28 +1309,28 @@ def _(
         _M_sat = 0.5 * abs(_M_pos_sat - _M_neg_sat)
         _sigma_M_sat = 0.5 * float(np.hypot(_s_pos_sat, _s_neg_sat))
 
-        # Method III: M_0(T) ≡ ½ (b_+ − b_-), where
+        # Method III: M_0^ext(T) ≡ ½ (b_+ − b_-), where
         # M_±^sat(T) is the ODR-line extrapolation of the ± branch's
         # saturated tail back to H=0 — i.e. the y-intercept b_± of the
-        # linear fit, equal to ±M_0 by symmetry.
+        # linear fit, equal to ±M_0^ext by symmetry.
         # Per the official guide: "fit a linear approximation
         # in the saturation regime and extrapolate to H=0".
         # Algebra (guide page 2):
-        #   in saturation,   M = M_0 + alpha * H
-        #   so               B/mu_0 = M_0 + (alpha + 1) * H,
-        #   i.e.             B/mu_0 - (alpha + 1) * H = M_0.
+        #   in saturation,   M = M_0^ext + alpha * H
+        #   so               B/mu_0 = M_0^ext + (alpha + 1) * H,
+        #   i.e.             B/mu_0 - (alpha + 1) * H = M_0^ext.
         # In SI we already pre-compute M = B/mu_0 - H in branches_for_row,
-        # so a linear ODR fit M(H) = M_0 + alpha * H on the saturation tail
-        # gives M_0 *as the y-intercept* — exactly the "extrapolate the
+        # so a linear ODR fit M(H) = M_0^ext + alpha * H on the saturation tail
+        # gives M_0^ext *as the y-intercept* — exactly the "extrapolate the
         # linear fit to H = 0" prescription.
         #
         # The LabVIEW table stores the H>=0 half of the upper branch in
         # *_pos and the H<=0 half of the lower branch in *_neg, so each
         # loop has exactly two saturation tips: the +H end of _pos
-        # (linear extrapolation hits the M-axis at +M_0) and the -H end
-        # of _neg (linear extrapolation hits at -M_0). The opposite ends
+        # (linear extrapolation hits the M-axis at +M_0^ext) and the -H end
+        # of _neg (linear extrapolation hits at -M_0^ext). The opposite ends
         # of each half are the remanence region, not saturation, and
-        # must not be used here. M_0 is the half-difference of the two
+        # must not be used here. M_0^ext is the half-difference of the two
         # signed intercepts; this also cancels any common offset shared
         # by both branches (e.g. the H-independent piece of the
         # paramagnetic background).
@@ -1341,12 +1341,12 @@ def _(
         # paramagnetic background chi_bg fitted earlier; the slope-
         # stability gate inside sat_intercept then operates on the
         # material slope and trips when we leave the linear regime.
-        # M_0 itself is invariant under this choice (a_bg, b_bg cancel
+        # M_0^ext itself is invariant under this choice (a_bg, b_bg cancel
         # in the half-difference), so this is a notational fix; it
         # matches the cross-run cell.
         # Headline Method III: linear ODR saturation-tail fit on a data-driven
         # window. The window is set by two literature-grounded gates — a
-        # near-saturation cut (M >= 0.95 M_0_seed, where M_0_seed is the
+        # near-saturation cut (M >= 0.95 M_0^ext seed, where the seed is the
         # guide's strict 5-point fit) and a slope-stability plateau on
         # alpha. This avoids hand-picking n and adapts loop-by-loop to
         # softening near T_c.
@@ -1432,7 +1432,7 @@ def _(
     diagnostics = pd.DataFrame(
         [
             {
-                "method": r"$M_{\mathrm{r}}$ (H=0)",
+                "method": r"$M_0$ (H=0)",
                 **transition_diagnostics(_T_used, summary["M_r_norm"].to_numpy()),
             },
             {
@@ -1440,7 +1440,7 @@ def _(
                 **transition_diagnostics(_T_used, summary["M_sat_norm"].to_numpy()),
             },
             {
-                "method": r"$M_0$ (sat. extrap.→H=0)",
+                "method": r"$M_0^{\mathrm{ext}}$ (sat. extrap.→H=0)",
                 **transition_diagnostics(_T_used, summary["M_0_norm"].to_numpy()),
             },
         ]
@@ -1450,8 +1450,8 @@ def _(
     # per-loop sigma_T (heating-rate smearing, resolution, and instrument accuracy) and the per-loop sigma_y
     # together to give a usable statistical 1-sigma on the half-height
     # crossing temperature. Methods I and II use this; Method III also
-    # produces a half-height crossing on the normalized M_0 curve, but
-    # its formal T_c estimate comes from the M_0^2(T) weighted line fit below.
+    # produces a half-height crossing on the normalized M_0^ext curve, but
+    # its formal T_c estimate comes from the [M_0^ext]^2(T) weighted line fit below.
     _tc_M_r, _stc_M_r = half_height_tc_with_sigma(
         _T_used,
         _sT_used,
@@ -1473,7 +1473,7 @@ def _(
     diagnostics_with_sigma = pd.DataFrame(
         [
             {
-                "method": r"$M_{\mathrm{r}}$ (half-height, H=0)",
+                "method": r"$M_0$ (half-height, H=0)",
                 "Tc_K": _tc_M_r,
                 "sigma_Tc_K": _stc_M_r,
             },
@@ -1483,7 +1483,7 @@ def _(
                 "sigma_Tc_K": _stc_M_sat,
             },
             {
-                "method": r"$M_0$ (half-height, sat. extrap.→H=0)",
+                "method": r"$M_0^{\mathrm{ext}}$ (half-height, sat. extrap.→H=0)",
                 "Tc_K": _tc_M_0,
                 "sigma_Tc_K": _stc_M_0,
             },
@@ -1545,8 +1545,9 @@ def _(
     $V_y(V_x{{=}}0)$ (white) and $V_y(V_x{{=}}V_{{x,\max}})$ (red) —
     are exactly Methods I and II below. Method III adds a third proxy
     that goes beyond the realtime display: it *extrapolates* the
-    saturated-tail ODR line back to $H=0$ to extract the spontaneous
-    magnetization $M_0$ (the guide's algebraic "Method III").
+    saturated-tail ODR line back to $H=0$ to extract the extrapolated
+    zero-field proxy $M_0^{{\mathrm{{ext}}}}$ (the guide's algebraic
+    "Method III").
 
     For numerical robustness against any common DC offset on $V_y$, we
     don't use a single-branch reading; instead we read both the upper
@@ -1559,10 +1560,10 @@ def _(
     *upper / lower branch of the same hysteresis loop*, not two
     separate experimental measurements.
 
-    **Method I: $M_r(T)$ — branches read at $H=0$ (remanence; LabVIEW $V_y(V_x{{=}}0)$)**
+    **Method I: $M_0(T)$ — branches read at $H=0$ (zero-field loop opening; LabVIEW $V_y(V_x{{=}}0)$)**
 
     $$
-    M_r(T)\;\equiv\;\tfrac12\left|M_+(T,H{{=}}0)-M_-(T,H{{=}}0)\right|.
+    M_0(T)\;\equiv\;\tfrac12\left|M_+(T,H{{=}}0)-M_-(T,H{{=}}0)\right|.
     $$
 
     $M_\pm(T,0)$ comes from a *local* ODR line of $M_\pm(T,H)$ on
@@ -1592,18 +1593,18 @@ def _(
     from Methods I, II, and III because the measured branch field amplitude
     had not yet reached the stable drive-field plateau.
 
-    **Method III: $M_0(T)$ — single-loop saturation tail, linearly extrapolated to $H=0$**
+    **Method III: $M_0^{{\mathrm{{ext}}}}(T)$ — single-loop saturation tail, linearly extrapolated to $H=0$**
 
     Following the official guide: in the saturation regime the same
     single loop's response is well-approximated by
 
     $$
-    M(H)=M_0+\alpha H \;\;\Longleftrightarrow\;\;
-    \frac{{B(H)}}{{\mu_0}}=M_0+(\alpha+1)H \;\;\Longleftrightarrow\;\;
-    \frac{{B}}{{\mu_0}}-(\alpha+1)H=M_0,
+    M(H)=M_0^{{\mathrm{{ext}}}}+\alpha H \;\;\Longleftrightarrow\;\;
+    \frac{{B(H)}}{{\mu_0}}=M_0^{{\mathrm{{ext}}}}+(\alpha+1)H \;\;\Longleftrightarrow\;\;
+    \frac{{B}}{{\mu_0}}-(\alpha+1)H=M_0^{{\mathrm{{ext}}}},
     $$
 
-    so $M_0(T)$ is recovered *as the intersection of the
+    so $M_0^{{\mathrm{{ext}}}}(T)$ is recovered *as the intersection of the
     saturation-tail ODR line with the $H=0$ axis*. The same hysteresis
     loop has two saturation tips — the $+H$ end of the upper branch and
     the $-H$ end of the lower branch — and we fit one straight line on
@@ -1616,11 +1617,11 @@ def _(
     M_-(T,H) = b_-(T) + \alpha_-(T)\,H \quad\text{{on the lower-branch }}-H\text{{ tail}}.
     $$
 
-    By symmetry $b_+\to+M_0$ and $b_-\to-M_0$ in the limit of an ideal
+    By symmetry $b_+\to+M_0^{{\mathrm{{ext}}}}$ and $b_-\to-M_0^{{\mathrm{{ext}}}}$ in the limit of an ideal
     loop, so the proxy is
 
     $$
-    M_0(T)\;\equiv\;\tfrac12\,\bigl[b_+(T)-b_-(T)\bigr].
+    M_0^{{\mathrm{{ext}}}}(T)\;\equiv\;\tfrac12\,\bigl[b_+(T)-b_-(T)\bigr].
     $$
 
     The intercepts $b_\pm$ are *not* two independent measurements; they
@@ -1637,21 +1638,21 @@ def _(
     The primary Method-III value keeps the guide's **linear** saturation-tail
     extrapolation, but the fit window is selected from the data rather than by
     blindly taking the last few points. A strict 5-point ODR line seeds
-    $M_0$; the candidate tail is then restricted to points satisfying the
-    near-saturation rule $|M|\ge0.95|\hat M_0|$, and the window is grown inward
+    $M_0^{{\mathrm{{ext}}}}$; the candidate tail is then restricted to points satisfying the
+    near-saturation rule $|M|\ge0.95|\hat M_0^{{\mathrm{{ext}}}}|$, and the window is grown inward
     only while the fitted high-field slope $\alpha$ remains statistically
     stable. The fixed 5-point result is retained as a sensitivity column.
 
     The branches are pre-corrected for the global paramagnetic
     background (fitted in the high-T cell above) before the saturation
     fit, so $\alpha$ here is purely the material's high-field
-    susceptibility (the guide's $\alpha$), not the bulk slope. $M_0$
+    susceptibility (the guide's $\alpha$), not the bulk slope. $M_0^{{\mathrm{{ext}}}}$
     itself is invariant under this choice — both the constant and
     linear pieces of the background cancel in the half-difference of
     the two branches — but separating $\alpha$ from $\chi_\mathrm{{bg}}$
     keeps the slope-stability gate physically interpretable.
 
-    All three proxies $M_{{\mathrm{{r}}}}(T)$, $M_{{\mathrm{{sat}}}}(T)$, and $M_0(T)$ are
+    All three proxies $M_0(T)$, $M_{{\mathrm{{sat}}}}(T)$, and $M_0^{{\mathrm{{ext}}}}(T)$ are
     normalized to $[0,1]$ for transition diagnostics:
 
     $$
@@ -1659,7 +1660,7 @@ def _(
     $$
 
     Method III is *additionally* kept unnormalized on the same uncalibrated
-    relative-axis scale so $M_0(T)$ can feed the weighted $M_0^2(T)$ mean-field
+    relative-axis scale so $M_0^{{\mathrm{{ext}}}}(T)$ can feed the weighted $[M_0^{{\mathrm{{ext}}}}]^2(T)$ mean-field
     check below.
 
     **Quick-look transition diagnostics** (half-height crossing and
@@ -1673,25 +1674,25 @@ def _(
     **Half-height $T_{{1/2}}^\mathrm{{app}}$ with local uncertainty** for all three
     methods. Each row is the half-height crossing temperature; the
     local uncertainty uses the temperature smearing and the ODR covariance of
-    the per-loop fit. Method III also feeds the linear $M_0^2(T)$
+    the per-loop fit. Method III also feeds the linear $[M_0^{{\mathrm{{ext}}}}]^2(T)$
     check below.
 
     {table_md(diag_sig, ["method", "Tc_K", "sigma_Tc_K"])}
 
-    Normalized ranges: $M_{{\mathrm{{r}}}}$ `{summary["M_r_norm"].min():.3f}`--`{summary["M_r_norm"].max():.3f}`, $M_{{\mathrm{{sat}}}}$ `{summary["M_sat_norm"].min():.3f}`--`{summary["M_sat_norm"].max():.3f}`, $M_0$ `{summary["M_0_norm"].min():.3f}`--`{summary["M_0_norm"].max():.3f}`.
+    Normalized ranges: $M_0$ `{summary["M_r_norm"].min():.3f}`--`{summary["M_r_norm"].max():.3f}`, $M_{{\mathrm{{sat}}}}$ `{summary["M_sat_norm"].min():.3f}`--`{summary["M_sat_norm"].max():.3f}`, $M_0^{{\mathrm{{ext}}}}$ `{summary["M_0_norm"].min():.3f}`--`{summary["M_0_norm"].max():.3f}`.
     """)
     return
 
 
 @app.cell
 def _(diagnostics_with_sigma, fit_functions, np, odr_fit, pd, summary):
-    # Mean-field square-root scaling near Tc:  M0(T)^2 ~= m * (Tc - T).
+    # Mean-field square-root scaling near Tc:  [M0_ext(T)]^2 ~= m * (Tc - T).
     # The mean-field form is only valid in a narrow band just below Tc;
-    # far below Tc, M0 saturates (M0 -> Msat) and M0^2 flattens, which
+    # far below Tc, M0_ext saturates and [M0_ext]^2 flattens, which
     # breaks the linear form. A wide-window fit pulls Tc upward.
     #
     # Algorithm: anchored window-size scan with physical gates.
-    #   1. Seed Tc from the half-height crossing on the normalized M_0
+    #   1. Seed Tc from the half-height crossing on the normalized M_0^ext
     #      curve (the same model-free anchor used elsewhere).
     #   2. Filter to the candidate pool: M0 > 0, SNR > 3, and a fixed
     #      band around the seed. The seed is not iterated, because letting
@@ -1816,7 +1817,7 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, pd, summary):
     )
 
     if odr_result is None:
-        raise RuntimeError("No physically acceptable M0^2 mean-field fit window found.")
+        raise RuntimeError("No physically acceptable M0_ext^2 mean-field fit window found.")
 
     msq_intercept = float(odr_result.params[0])
     msq_slope = float(odr_result.params[1])
@@ -1865,10 +1866,10 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, pd, summary):
 @app.cell(hide_code=True)
 def _(K_best, Tc_C, Tc_K, mo, odr_result, sigma_Tc_K):
     mo.md(rf"""
-    ## Method 3 cross-check: mean-field $M_0^2(T)$ extrapolation
+    ## Method 3 cross-check: mean-field $[M_0^{{\mathrm{{ext}}}}]^2(T)$ extrapolation
 
     > **This block is a check, not the main result.**
-    > The mean-field form $M_0^2(T)\propto T_c-T$ is only an approximation
+    > The mean-field form $[M_0^{{\mathrm{{ext}}}}]^2(T)\propto T_c-T$ is only an approximation
     > near the transition and is sensitive to which points are included.
     > The headline value is therefore the half-height apparent transition
     > reported in the bottom-line callout.
@@ -1887,7 +1888,6 @@ def _(K_best, Tc_C, Tc_K, mo, odr_result, sigma_Tc_K):
 @app.cell
 def _(
     BREWER,
-    K_best,
     M0_sq_all,
     T_all,
     Tc_K,
@@ -1900,8 +1900,6 @@ def _(
     sM0_sq_all,
     sT_all,
     save_figure,
-    sigma_Tc_K,
-    sigma_Tc_headline_stat,
 ):
     _data_color = BREWER["teal"]
     _fit_color = BREWER["orange"]
@@ -1996,7 +1994,7 @@ def _(
     ax_msq.set_xlim(_x_lo, _x_hi)
     ax_msq.set_ylim(_y_lo, _y_hi)
     ax_msq.set_xlabel(r"$T$ (K)")
-    ax_msq.set_ylabel(r"$M_0^{*2}/10^6$ (relative units)")
+    ax_msq.set_ylabel(r"$[M_0^{\mathrm{ext},*}]^2/10^6$ (relative units)")
     ax_msq.minorticks_on()
     ax_msq.grid(True, which="major", alpha=0.25)
     ax_msq.grid(True, which="minor", alpha=0.10)
@@ -2004,7 +2002,7 @@ def _(
 
     ax_msq_res.set_xlabel(r"$T$ (K)")
     ax_msq_res.set_ylabel(
-        r"$[M_0^{*2} - f(T)]/10^6$" + "\n" + r"(relative units)"
+        r"$([M_0^{\mathrm{ext},*}]^2 - f(T))/10^6$" + "\n" + r"(relative units)"
     )
     ax_msq_res.minorticks_on()
     ax_msq_res.grid(True, which="major", alpha=0.25)
@@ -2172,8 +2170,8 @@ def _(
     branches_for_row,
     data,
     field_ready_temperature_K,
-    local_intercept_at,
     linear_odr_fit,
+    local_intercept_at,
     np,
     pd,
     plt,
@@ -2357,7 +2355,7 @@ def _(
         edgecolor="white",
         linewidth=0.75,
         zorder=8,
-        label=r"I: $M_{\mathrm{r}}$",
+        label=r"I: $M_0$",
     )
     _method1_y = _to_vy(_H_method1, _M_method1)
     _method1_x = -0.085 * _x_span
@@ -2380,7 +2378,7 @@ def _(
     _ax_tail.text(
         _method1_x - 0.012 * _x_span,
         float(np.mean(_method1_y)),
-        r"I: $M_r$",
+        r"I: $M_0$",
         color=_method1_color,
         fontsize=12.0,
         va="center",
@@ -2494,7 +2492,7 @@ def _(
     )
     _tail_intercept_y = _to_vy([0.0, 0.0], [_b_pos_fit, _b_neg_fit])
     _ax_tail.annotate(
-        r"III: $M_0$",
+        r"III: $M_0^{\mathrm{ext}}$",
         xy=(0.0, float(np.max(_tail_intercept_y))),
         xytext=(0.045 * _x_span, float(np.max(_tail_intercept_y)) + 0.07 * _y_span),
         color=_fit_color,
@@ -2585,7 +2583,7 @@ def _(
             markerfacecolor=_method1_color,
             markeredgecolor="white",
             markersize=5.8,
-            label=r"I: $M_{\mathrm{r}}$ at $V_x=0$",
+            label=r"I: $M_0$ at $V_x=0$",
         ),
         Line2D(
             [0],
@@ -2650,7 +2648,7 @@ def _(BREWER, Line2D, diagnostics, np, plt, save_figure, smooth, summary):
     sigma_T_arr = summary["sigma_T_K"].to_numpy()
     _order = np.argsort(temperature)
     series = [
-        ("M_r_norm", "sigma_M_r_norm", r"$M_{\mathrm{r}}$", BREWER["teal"], "o", "-"),
+        ("M_r_norm", "sigma_M_r_norm", r"$M_0$", BREWER["teal"], "o", "-"),
         (
             "M_sat_norm",
             "sigma_M_sat_norm",
@@ -2662,7 +2660,7 @@ def _(BREWER, Line2D, diagnostics, np, plt, save_figure, smooth, summary):
         (
             "M_0_norm",
             "sigma_M_0_norm",
-            r"$M_0$",
+            r"$M_0^{\mathrm{ext}}$",
             BREWER["purple"],
             "^",
             "-",
@@ -2733,7 +2731,7 @@ def _(BREWER, Line2D, diagnostics, np, plt, save_figure, smooth, summary):
         0.5, color=_half_height_color, linestyle="-", linewidth=1.1, alpha=0.90
     )
     ax_methods.set_xlabel(r"$T$ (K)")
-    ax_methods.set_ylabel(r"$M/M_{\mathrm{sat}}$")
+    ax_methods.set_ylabel(r"$\tilde M$")
     ax_methods.set_ylim(-0.03, 1.03)
     _T_pad = max(1.5, 0.025 * (float(np.nanmax(temperature)) - float(np.nanmin(temperature))))
     ax_methods.set_xlim(float(np.nanmin(temperature)) - _T_pad, float(np.nanmax(temperature)) + _T_pad)
@@ -2791,7 +2789,7 @@ def _(
     # measurement at different primary resistance / drive-field settings and
     # discuss the effect, so these scans are treated as controlled-condition
     # comparisons rather than hidden statistical repeats. The Method-III
-    # M_0^2(T) mean-field fit is still computed per run as a qualitative check.
+    # [M_0^ext]^2(T) mean-field fit is still computed per run as a qualitative check.
     # All locals start with an underscore so marimo treats them as
     # cell-private (no clashes with the main-pipeline names above).
     # Same Curie-circuit override as the main pipeline (see top cell).
@@ -2981,9 +2979,9 @@ def _(
         T_used = run_summary["temperature_K"].to_numpy()
         sT_used = run_summary["sigma_T_K"].to_numpy()
         method_specs = [
-            ("M_r", r"$M_{\mathrm{r}}$", "M_r_norm", "sigma_M_r_norm"),
+            ("M_r", r"$M_0$", "M_r_norm", "sigma_M_r_norm"),
             ("M_sat", r"$M_{\mathrm{sat}}$", "M_sat_norm", "sigma_M_sat_norm"),
-            ("M_0", r"$M_0$", "M_0_norm", "sigma_M_0_norm"),
+            ("M_0", r"$M_0^{\mathrm{ext}}$", "M_0_norm", "sigma_M_0_norm"),
         ]
         method_rows = []
         for method_key, method_label, y_col, sy_col in method_specs:
@@ -3229,9 +3227,18 @@ def _(
 
 
 @app.cell
-def _(BREWER, Line2D, np, plt, run_curves, run_method_tcs, save_figure, smooth):
+def _(
+    BREWER,
+    Line2D,
+    np,
+    plt,
+    run_curves,
+    run_method_tcs,
+    save_figure,
+    smooth,
+):
     _method_specs = [
-        ("M_r", "M_r_norm", "sigma_M_r_norm", r"$M_{\mathrm{r}}$", BREWER["teal"], "o"),
+        ("M_r", "M_r_norm", "sigma_M_r_norm", r"$M_0$", BREWER["teal"], "o"),
         (
             "M_sat",
             "M_sat_norm",
@@ -3240,7 +3247,7 @@ def _(BREWER, Line2D, np, plt, run_curves, run_method_tcs, save_figure, smooth):
             BREWER["orange"],
             "s",
         ),
-        ("M_0", "M_0_norm", "sigma_M_0_norm", r"$M_0$", BREWER["purple"], "^"),
+        ("M_0", "M_0_norm", "sigma_M_0_norm", r"$M_0^{\mathrm{ext}}$", BREWER["purple"], "^"),
     ]
 
     _fig_methods_all = plt.figure(figsize=(8.4, 4.8), constrained_layout=True)
@@ -3330,11 +3337,11 @@ def _(BREWER, Line2D, np, plt, run_curves, run_method_tcs, save_figure, smooth):
     _plot_run(_axes_by_run["series C"], "series C")
 
     _axes_by_run["series A"].set_xlabel(r"$T$ (K)")
-    _axes_by_run["series A"].set_ylabel(r"$M/M_{\mathrm{sat}}$")
+    _axes_by_run["series A"].set_ylabel(r"$\tilde M$")
     _axes_by_run["series C"].set_xlabel(r"$T$ (K)")
     _axes_by_run["series B"].tick_params(labelbottom=False)
     for _run in ("series B", "series C"):
-        _axes_by_run[_run].set_ylabel(r"$M/M_{\mathrm{sat}}$", fontsize=8.5)
+        _axes_by_run[_run].set_ylabel(r"$\tilde M$", fontsize=8.5)
         _axes_by_run[_run].tick_params(axis="both", labelsize=7.7)
 
     _legend_handles = [
@@ -3356,7 +3363,7 @@ def _(BREWER, np, plt, run_curves, run_method_tcs, save_figure, smooth):
         ("series C", "Series C", BREWER["purple"], "^"),
     ]
     _method_specs = [
-        ("M_r", "M_r_norm", "sigma_M_r_norm", r"$M_{\mathrm{r}}$", "curie_series_compare_Mr"),
+        ("M_r", "M_r_norm", "sigma_M_r_norm", r"$M_0$", "curie_series_compare_Mr"),
         (
             "M_sat",
             "M_sat_norm",
@@ -3364,7 +3371,7 @@ def _(BREWER, np, plt, run_curves, run_method_tcs, save_figure, smooth):
             r"$M_{\mathrm{sat}}$",
             "curie_series_compare_Msat",
         ),
-        ("M_0", "M_0_norm", "sigma_M_0_norm", r"$M_0$", "curie_series_compare_M0"),
+        ("M_0", "M_0_norm", "sigma_M_0_norm", r"$M_0^{\mathrm{ext}}$", "curie_series_compare_M0"),
     ]
     _half_height_color = BREWER["rose"]
 
@@ -3435,7 +3442,7 @@ def _(BREWER, np, plt, run_curves, run_method_tcs, save_figure, smooth):
         )
         _ax.set_title(_method_label)
         _ax.set_xlabel(r"$T$ (K)")
-        _ax.set_ylabel(r"$M/M_{\mathrm{sat}}$")
+        _ax.set_ylabel(r"$\tilde M$")
         _ax.set_ylim(-0.03, 1.03)
         if _x_edges:
             _x_all = np.concatenate(_x_edges)
@@ -3574,46 +3581,90 @@ def _(BREWER, RUN_FILES, cross_run, np, pd, plt, save_figure):
 
 
 @app.cell
-def _(BREWER, cross_run, np, plt, run_curves, save_figure, smooth):
+def _(BREWER, np, plt, run_curves, run_method_tcs, save_figure, smooth):
     # Measured counterpart to the guide's finite-field sketch. The x-axis is
     # the measured temperature, because the transition temperature is the
     # quantity inferred from the curves rather than a known normalization.
     fig_drive, ax_drive = plt.subplots(figsize=(7.2, 4.4), constrained_layout=True)
 
-    _run_order = ["series C", "series A", "series B"]
-    _colors = [BREWER["purple"], BREWER["teal"], BREWER["orange"]]
-    _markers = ["^", "o", "s"]
+    _series_specs = [
+        ("series A", "Series A", BREWER["teal"], "o"),
+        ("series B", "Series B", BREWER["orange"], "s"),
+        ("series C", "Series C", BREWER["purple"], "^"),
+    ]
+    _method_key = "M_sat"
+    _method_label = r"Method II: $M_{\mathrm{sat}}$"
+    _column = "M_sat_norm"
+    _scolumn = "sigma_M_sat_norm"
+    _half_height_color = BREWER["rose"]
     _x_edges = []
 
-    for _run, _color, _marker in zip(_run_order, _colors, _markers):
+    for _run, _run_label, _color, _marker in _series_specs:
         _rows = run_curves.loc[run_curves["run"] == _run].sort_values("temperature_K")
         if _rows.empty:
             continue
         _x = _rows["temperature_K"].to_numpy(float)
-        _y = _rows["M_sat_norm"].to_numpy(float)
+        _y = _rows[_column].to_numpy(float)
+        _sigma_T = _rows["sigma_T_K"].to_numpy(float)
+        _sy = _rows[_scolumn].to_numpy(float)
         _x_edges.append(_x)
-        _label = _run.title()
+        _stride = max(1, len(_x) // 45)
+        ax_drive.errorbar(
+            _x[::_stride],
+            _y[::_stride],
+            xerr=_sigma_T[::_stride],
+            yerr=_sy[::_stride],
+            fmt=_marker,
+            markersize=2.6,
+            markeredgewidth=0.0,
+            color=_color,
+            ecolor=_color,
+            elinewidth=0.45,
+            alpha=0.55,
+            zorder=2,
+        )
         ax_drive.plot(
             _x,
             smooth(_y),
             color=_color,
-            linewidth=2.2,
-            label=_label,
+            linewidth=2.05,
+            label=_run_label,
+            zorder=3,
         )
-        _stride = max(1, len(_x) // 45)
-        ax_drive.scatter(
-            _x[::_stride],
-            _y[::_stride],
-            color=_color,
-            marker=_marker,
-            s=13,
-            alpha=0.42,
-            linewidths=0.0,
-        )
+        _tc_row = run_method_tcs.loc[
+            (run_method_tcs["run"] == _run)
+            & (run_method_tcs["method_key"] == _method_key)
+        ]
+        if not _tc_row.empty:
+            _tc = float(_tc_row.iloc[0]["Tc_K"])
+            if np.isfinite(_tc):
+                ax_drive.plot(
+                    _tc,
+                    0.5,
+                    marker=_marker,
+                    markersize=5.4,
+                    color=_color,
+                    markerfacecolor="white",
+                    markeredgewidth=1.0,
+                    zorder=4,
+                )
 
-    ax_drive.axhline(0.5, color="0.45", linewidth=0.8, linestyle="--", alpha=0.65)
+    ax_drive.axhline(0.5, color=_half_height_color, linewidth=1.0)
+    ax_drive.text(
+        0.985,
+        0.515,
+        "half height",
+        transform=ax_drive.get_yaxis_transform(),
+        ha="right",
+        va="bottom",
+        color=_half_height_color,
+        fontsize=8.2,
+        bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.88, "pad": 0.7},
+        zorder=5,
+    )
+    ax_drive.set_title(r"All series, " + _method_label)
     ax_drive.set_xlabel(r"$T$ (K)")
-    ax_drive.set_ylabel(r"$M/M_{\mathrm{sat}}$")
+    ax_drive.set_ylabel(r"$\tilde M$")
     if _x_edges:
         _x_all = np.concatenate(_x_edges)
         _x_lo = float(np.nanmin(_x_all))
@@ -3625,7 +3676,7 @@ def _(BREWER, cross_run, np, plt, run_curves, save_figure, smooth):
     ax_drive.set_ylim(-0.03, 1.03)
     ax_drive.minorticks_on()
     ax_drive.grid(True, which="major", alpha=0.24)
-    ax_drive.grid(True, which="minor", alpha=0.10)
+    ax_drive.grid(True, which="minor", alpha=0.09)
     ax_drive.legend(loc="upper right", framealpha=0.95, fontsize=8)
     save_figure(fig_drive, "curie_measured_drive_comparison")
     fig_drive
@@ -3637,7 +3688,7 @@ def _(mo):
     mo.md(r"""
     ## Method IV qualitative cross-check: Curie--Weiss above $T_c$
 
-    The half-height (Methods I–III) and mean-field (Method III $M_0^2$)
+    The half-height (Methods I–III) and mean-field (Method III $[M_0^{\mathrm{ext}}]^2$)
     estimators all use the *below-$T_c$* side of the transition. As a
     qualitative cross-check, we also fit the *above-$T_c$* side via the
     Curie–Weiss law
@@ -3792,11 +3843,11 @@ def _(
     sigma_Tc_CW,
     sigma_Tc_K,
 ):
-    # Bottom-line. The half-height crossings of M_r, M_sat, and M_0
+    # Bottom-line. The half-height crossings of M_0, M_sat, and M_0^ext
     # (Methods I, II, III in normalized form) are the headline
     # estimators because they are model-free: each locates the
     # temperature where the smoothed proxy crosses 50% of its dynamic
-    # range. The mean-field M_0^2(T) line zero-crossing and the Curie-Weiss
+    # range. The mean-field [M_0^ext]^2(T) line zero-crossing and the Curie-Weiss
     # intercept are reported as cross-checks and are not pooled into the headline.
     finite_hh = diagnostics_with_sigma.dropna(subset=["Tc_K"])
     hh_tcs = finite_hh["Tc_K"].to_numpy(dtype=float)
@@ -3992,7 +4043,7 @@ def _(
     in quadrature.
 
     **Check: linearized mean-field $T_c$ on series A.**
-    The $M_0^2(T)\propto T_c-T$ form is a near-$T_c$ approximation.
+    The $[M_0^{{\mathrm{{ext}}}}]^2(T)\propto T_c-T$ form is a near-$T_c$ approximation.
     With a narrow transition window,
     the weighted linear fit gives $T_c^\mathrm{{MF}}={Tc_K:.1f}\pm{sigma_Tc_K:.1f}\,\mathrm{{K}}$
     ($\chi^2/\nu={odr_result.redchi:.2f}$). This is ${mf_shift_display:.1f}\,\mathrm{{K}}
