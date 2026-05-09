@@ -139,7 +139,7 @@ def _():
     ROOT = Path(__file__).resolve().parent
     DATA_DIR = ROOT / "data"
     DATA_XLSX = ROOT.parent / "ferromagnetism" / "data" / "data.xlsx"
-    FIG_DIR = ROOT.parent.parent / "report" / "media"
+    FIG_DIR = ROOT.parent / "report" / "media"
     FIG_DIR.mkdir(parents=True, exist_ok=True)
 
     # All three series (sweep duplicates), in chronological order.
@@ -885,7 +885,7 @@ def _(
                 h_per_x=h_per_x,
                 h_to_m_factor=h_to_m_factor,
             )
-        except np.linalg.LinAlgError, ValueError:
+        except (np.linalg.LinAlgError, ValueError):
             return float(np.interp(H0, np.sort(h_loc), m_loc[np.argsort(h_loc)])), 0.0
         m_at_H0 = float(fit["intercept"] + fit["slope"] * H0)
         sigma_at_H0 = float(line_fit_sigma(H0, fit["cov"]))
@@ -964,7 +964,7 @@ def _(
             return float(center) if np.isfinite(center) else np.nan, np.nan
 
         T0, T1 = float(Ts[i]), float(Ts[i + 1])
-        y0, y1 = float(yn[i]), float(yn[i + 1])
+        y0, y1 = float(yn[i]), float(yn[i + 1])  # type: ignore
         dT = T1 - T0
         dy = y1 - y0
         frac = (0.5 - y0) / dy
@@ -2009,7 +2009,7 @@ def _(
     ax_msq_res.grid(True, which="minor", alpha=0.10)
 
     save_figure(fig_msq, "curie_method3_M0sq")
-    fig_msq
+    fig_msq  # type: ignore
     return
 
 
@@ -2150,7 +2150,7 @@ def _(
     ax_pm.legend(loc="lower right", framealpha=0.95, fontsize=7.3)
 
     save_figure(fig_loops, "curie_selected_loops")
-    fig_loops
+    fig_loops  # type: ignore
     return
 
 
@@ -2762,7 +2762,7 @@ def _(BREWER, Line2D, diagnostics, np, plt, save_figure, smooth, summary):
     ax_methods.legend(handles=legend_handles, loc="upper right")
 
     save_figure(fig_methods, "curie_method123_normalized")
-    fig_methods
+    fig_methods  # type: ignore
     return
 
 
@@ -3351,7 +3351,7 @@ def _(
     _axes_by_run["series A"].legend(handles=_legend_handles, loc="upper right", fontsize=8.0)
 
     save_figure(_fig_methods_all, "curie_method123_all_series")
-    _fig_methods_all
+    _fig_methods_all  # type: ignore
     return
 
 
@@ -3576,7 +3576,7 @@ def _(BREWER, RUN_FILES, cross_run, np, pd, plt, save_figure):
     )
 
     save_figure(_fig_cov, "curie_run_coverage")
-    _fig_cov
+    _fig_cov  # type: ignore
     return
 
 
@@ -3679,7 +3679,7 @@ def _(BREWER, np, plt, run_curves, run_method_tcs, save_figure, smooth):
     ax_drive.grid(True, which="minor", alpha=0.09)
     ax_drive.legend(loc="upper right", framealpha=0.95, fontsize=8)
     save_figure(fig_drive, "curie_measured_drive_comparison")
-    fig_drive
+    fig_drive  # type: ignore
     return
 
 
@@ -3756,7 +3756,7 @@ def _(
             _co, _cov = np.polyfit(_H, _M, 1, cov=True)
             chi_vals[_i] = float(_co[0])
             sigma_chi_vals[_i] = float(np.sqrt(_cov[0, 0]))
-        except np.linalg.LinAlgError, ValueError:
+        except (np.linalg.LinAlgError, ValueError):
             pass
 
     T_arr = TEMPERATURE_K
@@ -4262,7 +4262,7 @@ def _(
     _ax_tc.legend(loc="upper left", fontsize=7.4, framealpha=0.95, ncol=2)
 
     save_figure(_fig_tc, "curie_tc_summary")
-    _fig_tc
+    _fig_tc  # type: ignore
     return
 
 

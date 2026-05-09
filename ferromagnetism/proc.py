@@ -144,7 +144,7 @@ def _():
 
     _here = Path(__file__).resolve().parent
     DATA_XLSX = _here / "data" / "data.xlsx"
-    FIG_DIR = _here.parent.parent / "report" / "media"
+    FIG_DIR = _here.parent / "report" / "media"
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     # CODATA-2022 μ₀ (post-2019 SI); uncertainty ~10⁻¹⁶ is negligible
     # vs. our ~10⁻⁸ measurement σ, but is carried for nσ reporting.
@@ -192,7 +192,6 @@ def _():
 def _(BREWER, FIG_DIR, np, pd, plt):
     _loop_path = (
         FIG_DIR.parent.parent
-        / "analysis"
         / "curie"
         / "data"
         / "series A"
@@ -563,7 +562,7 @@ def _(BREWER, FIG_DIR, PchipInterpolator, np, plt, pt1):
     axMu.set_ylim(max(0.0, _mu_lo - _mu_pad), _mu_hi + _mu_pad)
 
     fig.savefig(FIG_DIR / "fig_BH_mu.pdf", bbox_inches="tight", dpi=600)
-    fig
+    fig  # type: ignore
     return
 
 
@@ -825,7 +824,7 @@ def _(FIG_DIR, RUNS, fits, np, plt):
     ax_res.grid(True, which="minor", alpha=0.10)
 
     fig2.savefig(FIG_DIR / "fig_copper_gap.pdf", bbox_inches="tight", dpi=600)
-    fig2
+    fig2  # type: ignore
     return
 
 
