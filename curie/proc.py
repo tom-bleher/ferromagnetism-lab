@@ -150,7 +150,6 @@ def _():
     DATA_FILE = RUN_FILES["series A"]
 
     MU0 = 1.25663706127e-6
-    FIELD_READY_FRACTION = 0.98
     TARGET_LOOP_TEMPERATURES_K = [180, 195, 210, 225, 240, 270]
 
     # Adaptive bound on the absolute thermometer accuracy. The bench
@@ -189,7 +188,6 @@ def _():
         BREWER,
         DATA_FILE,
         DATA_XLSX,
-        FIELD_READY_FRACTION,
         FIG_DIR,
         Line2D,
         METHOD3_EXAMPLE_TEMPERATURE_K,
@@ -273,60 +271,14 @@ def _(np, plt, save_figure):
 @app.cell
 def _(
     DATA_FILE,
-    FIELD_READY_FRACTION,
     FIG_DIR,
-    Line2D,
     Normalize,
     np,
     pd,
     plt,
 ):
-    import re
-
     data_prep_dir = DATA_FILE.parent.parent
-    data_prep_runs = [
-        {"label": "Series A", "name": "series A", "color": "#1b9e77"},
-        {"label": "Series B", "name": "series B", "color": "#d95f02"},
-        {"label": "Series C", "name": "series C", "color": "#7570b3"},
-    ]
     scope_target_temperatures_K = [83.0, 130.0, 181.0, 205.0, 225.0, 270.0]
-    discarded_color = "0.55"
-    plateau_color = "#4477aa"
-    threshold_color = "0.18"
-
-    def _numeric_suffix(name):
-        match = re.search(r"(\d+)$", name)
-        return int(match.group(1)) if match else 0
-
-    def _curie_file(directory):
-        return next(directory.glob("CurieData_*"))
-
-    def _read_curie(directory):
-        df = pd.read_csv(_curie_file(directory), sep="\t")
-        t_k = pd.Series(df["Temperature (C)"].to_numpy(float) + 273.15, name="T_K")
-        return pd.concat([df, t_k], axis=1)
-
-    def _cols(df, prefix):
-        return sorted([c for c in df.columns if c.startswith(prefix)], key=_numeric_suffix)
-
-    def _usable_x_window(df):
-        x_pos = _cols(df, "X_pos")
-        x_neg = _cols(df, "X_neg")
-        values = []
-        for _, row in df.iterrows():
-            right_edge = float(row[x_pos].to_numpy(float).max())
-            left_edge = float(-row[x_neg].to_numpy(float).min())
-            values.append(min(right_edge, left_edge))
-        return np.asarray(values)
-
-    def _field_ready(df):
-        x_window = _usable_x_window(df)
-        plateau = float(np.median(x_window[len(x_window) // 2 :]))
-        threshold = FIELD_READY_FRACTION * plateau
-        ready = np.flatnonzero(x_window >= threshold)
-        if ready.size == 0:
-            raise RuntimeError("No field-ready loop found")
-        return x_window, plateau, threshold, int(ready[0])
 
     def _loop_temperature_from_path(path):
         label = path.stem.removeprefix("HystLoop_").removesuffix("C")
@@ -384,194 +336,7 @@ def _(
         _save_data_prep_figure(fig, "curie_scope_transition_frames")
         plt.close(fig)
 
-    def _make_data_preparation_cuts():
-        fig, ax = plt.subplots(figsize=(7.4, 4.25), constrained_layout=True)
-        ax.axhline(1.0, color=plateau_color, linewidth=1.0, alpha=0.85)
-        ax.axhline(
-            FIELD_READY_FRACTION,
-            color=threshold_color,
-            linestyle=(0, (5.0, 2.2)),
-            linewidth=0.95,
-        )
-
-        _T_edges = []
-        _ratio_edges = []
-        for run in data_prep_runs:
-            current = _read_curie(data_prep_dir / run["name"])
-            x_window, plateau, _, ready_idx = _field_ready(current)
-            T = current["T_K"].to_numpy(float)
-            ratio = x_window / plateau
-            _T_edges.append(T)
-            _ratio_edges.append(ratio)
-            before = np.arange(len(T)) < ready_idx
-            after = ~before
-
-            ax.scatter(
-                T[before],
-                ratio[before],
-                s=10,
-                color=discarded_color,
-                alpha=0.42,
-                edgecolor="none",
-            )
-            ax.plot(T[after], ratio[after], color=run["color"], linewidth=1.25, alpha=0.72)
-            ax.scatter(
-                T[after],
-                ratio[after],
-                s=13,
-                color=run["color"],
-                alpha=0.82,
-                edgecolor="none",
-            )
-            ax.scatter(
-                T[ready_idx],
-                ratio[ready_idx],
-                s=26,
-                marker="D",
-                color=run["color"],
-                edgecolor="white",
-                linewidth=0.55,
-                zorder=4,
-            )
-
-        ax.set_xlabel(r"$T$ (K)")
-        ax.set_ylabel(r"$X_\mathrm{win}/X_\mathrm{plateau}$")
-        if _T_edges:
-            _T_all = np.concatenate(_T_edges)
-            _T_pad = max(2.0, 0.02 * (float(np.nanmax(_T_all)) - float(np.nanmin(_T_all))))
-            ax.set_xlim(float(np.nanmin(_T_all)) - _T_pad, float(np.nanmax(_T_all)) + _T_pad)
-        if _ratio_edges:
-            _ratio_all = np.concatenate(_ratio_edges)
-            _r_lo = max(0.70, float(np.nanmin(_ratio_all)) - 0.02)
-            _r_hi = min(1.06, float(np.nanmax(_ratio_all)) + 0.02)
-            ax.set_ylim(_r_lo, _r_hi)
-        else:
-            ax.set_ylim(0.70, 1.06)
-        ax.minorticks_on()
-        ax.grid(True, which="major", alpha=0.24)
-        ax.grid(True, which="minor", alpha=0.10)
-        legend_handles = [
-            Line2D(
-                [0],
-                [0],
-                color=plateau_color,
-                linewidth=1.1,
-                alpha=0.85,
-                label="field plateau (1.00)",
-            ),
-            Line2D(
-                [0],
-                [0],
-                color=threshold_color,
-                linestyle=(0, (5.0, 2.2)),
-                linewidth=1.0,
-                label="field-ready cut (0.98)",
-            ),
-            Line2D(
-                [0],
-                [0],
-                marker="o",
-                linestyle="None",
-                markersize=4.2,
-                markerfacecolor=discarded_color,
-                markeredgecolor="none",
-                alpha=0.42,
-                label="discarded loops",
-            ),
-        ]
-        legend_handles.extend(
-            Line2D(
-                [0],
-                [0],
-                color=run["color"],
-                linewidth=1.25,
-                alpha=0.72,
-                marker="o",
-                markersize=4.4,
-                markerfacecolor=run["color"],
-                markeredgecolor="none",
-                label=run["label"],
-            )
-            for run in data_prep_runs
-        )
-        ax.legend(
-            handles=legend_handles,
-            loc="lower right",
-            ncol=2,
-            fontsize=7.4,
-            framealpha=0.95,
-            borderpad=0.45,
-            labelspacing=0.4,
-            handlelength=2.2,
-            handletextpad=0.65,
-            columnspacing=1.15,
-        )
-        _save_data_prep_figure(fig, "curie_data_preparation_cuts")
-        plt.close(fig)
-
-    def _make_rejected_loop_example():
-        run = data_prep_runs[0]
-        current = _read_curie(data_prep_dir / run["name"])
-        _, _, _, ready_idx = _field_ready(current)
-        T = current["T_K"].to_numpy(float)
-        loop_dir = data_prep_dir / run["name"]
-
-        discarded_indices = np.arange(0, ready_idx, dtype=int)
-        sample_indices = np.unique(
-            np.rint(
-                np.linspace(
-                    discarded_indices[0],
-                    discarded_indices[-1],
-                    min(6, discarded_indices.size),
-                )
-            ).astype(int)
-        )
-        selected = [pd.read_csv(_nearest_loop_file(loop_dir, float(T[idx])), sep="\t") for idx in sample_indices]
-        first_kept = pd.read_csv(_nearest_loop_file(loop_dir, float(T[ready_idx])), sep="\t")
-
-        x_all = np.concatenate(
-            [loop["X (Volt)"].to_numpy(float) for loop in [*selected, first_kept]]
-        )
-        y_all = np.concatenate(
-            [loop["Y (Volt)"].to_numpy(float) for loop in [*selected, first_kept]]
-        )
-        x_pad = 0.04 * (float(x_all.max()) - float(x_all.min()))
-        y_pad = 0.06 * (float(y_all.max()) - float(y_all.min()))
-
-        fig, ax = plt.subplots(figsize=(5.3, 4.0), constrained_layout=True)
-        for j, loop in enumerate(selected):
-            ax.plot(
-                loop["X (Volt)"],
-                loop["Y (Volt)"],
-                color="0.68",
-                linewidth=0.95,
-                alpha=0.45,
-                label="discarded" if j == 0 else None,
-            )
-        ax.plot(
-            first_kept["X (Volt)"],
-            first_kept["Y (Volt)"],
-            color=run["color"],
-            linewidth=1.75,
-            alpha=0.95,
-            label="first kept",
-        )
-        ax.axhline(0.0, color="0.25", linewidth=0.7)
-        ax.axvline(0.0, color="0.25", linewidth=0.7)
-        ax.set_xlim(float(x_all.min()) - x_pad, float(x_all.max()) + x_pad)
-        ax.set_ylim(float(y_all.min()) - y_pad, float(y_all.max()) + y_pad)
-        ax.set_xlabel(r"$V_x$ (V)")
-        ax.set_ylabel(r"$V_y$ (V)")
-        ax.minorticks_on()
-        ax.grid(True, which="major", alpha=0.24)
-        ax.grid(True, which="minor", alpha=0.10)
-        ax.legend(loc="lower right", fontsize=8.2, framealpha=0.94)
-        _save_data_prep_figure(fig, "curie_rejected_loop_example")
-        plt.close(fig)
-
     _make_scope_transition_frames()
-    _make_data_preparation_cuts()
-    _make_rejected_loop_example()
     return
 
 
@@ -1221,7 +986,6 @@ def _(background_intercept, background_slope, high_temperature_mask, mo):
 
 @app.cell
 def _(
-    FIELD_READY_FRACTION,
     TEMPERATURE_C,
     TEMPERATURE_K,
     TIME_S,
@@ -1245,22 +1009,16 @@ def _(
         branch_hmax.append(min(float(_H_pos.max()), float(-_H_neg.min())))
     branch_hmax = np.asarray(branch_hmax)
 
-    stable_hmax = float(np.median(branch_hmax[len(branch_hmax) // 2 :]))
-    ready_threshold = FIELD_READY_FRACTION * stable_hmax
-    _ready_indices = np.flatnonzero(branch_hmax >= ready_threshold)
-    field_ready_start_index = int(_ready_indices[0])
-    field_ready_temperature_K = float(TEMPERATURE_K[field_ready_start_index])
-
-    valid_indices = np.arange(field_ready_start_index, len(data))
-    common_hmax = float(branch_hmax[valid_indices].min())
-    # Method II is evaluated at the saturation field H = ±H_sat ≈ H_max,
+    valid_indices = np.arange(len(data))
+    typical_hmax = float(np.median(branch_hmax[valid_indices]))
+    # Method II is evaluated per loop at H = ±H_sat(T) ≈ H_max(T),
     # mirroring the LabVIEW realtime "Y(X_min/max)" trace (red curve in
     # the on-screen monitor). Setting H_sat strictly equal to the per-loop
     # H_max would put us at the very edge of the recorded sweep, where
     # nearest-neighbour interpolation has no points outside the bracket;
     # a small inboard offset (0.98 H_max) keeps the local fit well-posed
     # while staying inside the saturation regime that matches LabVIEW.
-    H_SAT = 0.98 * common_hmax
+    H_SAT = 0.98 * typical_hmax
     _h_to_m_factor = 1.0 + background_slope
 
     records = []
@@ -1294,16 +1052,17 @@ def _(
         # on-screen monitor) — what the instructor's display shows for
         # M_sat(T). Same local-ODR machinery as Method I but at H=±H_sat
         # rather than H=0.
+        _H_sat_i = 0.98 * branch_hmax[_i]
         _M_pos_sat, _s_pos_sat = local_intercept_at(
             _H_pos,
             _M_pos_corr,
-            H_SAT,
+            _H_sat_i,
             h_to_m_factor=_h_to_m_factor,
         )
         _M_neg_sat, _s_neg_sat = local_intercept_at(
             _H_neg,
             _M_neg_corr,
-            -H_SAT,
+            -_H_sat_i,
             h_to_m_factor=_h_to_m_factor,
         )
         _M_sat = 0.5 * abs(_M_pos_sat - _M_neg_sat)
@@ -1389,6 +1148,7 @@ def _(
                 "temperature_K": TEMPERATURE_K[_i],
                 "sigma_T_K": float(sigma_T_K[_i]),
                 "branch_hmax_rel": branch_hmax[_i],
+                "H_sat_rel": _H_sat_i,
                 "M_r_rel": _M_r,
                 "sigma_M_r_rel": _sigma_M_r,
                 "M_sat_rel": _M_sat,
@@ -1425,7 +1185,6 @@ def _(
     )
     summary["M_0_positive"] = summary["M_0_rel"] > 0
     summary["M_0_fit_valid"] = summary["M_0_positive"] & (summary["M_0_snr"] > 3.0)
-    summary["field_fraction_of_common"] = summary["branch_hmax_rel"] / common_hmax
 
     _T_used = summary["temperature_K"].to_numpy()
     _sT_used = summary["sigma_T_K"].to_numpy()
@@ -1436,7 +1195,7 @@ def _(
                 **transition_diagnostics(_T_used, summary["M_r_norm"].to_numpy()),
             },
             {
-                "method": rf"$M_{{\mathrm{{sat}}}}$ ($H^*$=±{H_SAT:.2f})",
+                "method": r"$M_{\mathrm{sat}}$ ($H^*=\pm0.98H_{\max}(T)$)",
                 **transition_diagnostics(_T_used, summary["M_sat_norm"].to_numpy()),
             },
             {
@@ -1478,7 +1237,7 @@ def _(
                 "sigma_Tc_K": _stc_M_r,
             },
             {
-                "method": rf"$M_{{\mathrm{{sat}}}}$ (half-height, $H^*$=±{H_SAT:.2f})",
+                "method": r"$M_{\mathrm{sat}}$ (half-height, $H^*=\pm0.98H_{\max}(T)$)",
                 "Tc_K": _tc_M_sat,
                 "sigma_Tc_K": _stc_M_sat,
             },
@@ -1491,23 +1250,21 @@ def _(
     )
     return (
         H_SAT,
-        common_hmax,
         diagnostics,
         diagnostics_with_sigma,
-        field_ready_temperature_K,
         summary,
+        typical_hmax,
     )
 
 
 @app.cell(hide_code=True)
 def _(
     H_SAT,
-    common_hmax,
     diagnostics,
     diagnostics_with_sigma,
-    field_ready_temperature_K,
     mo,
     summary,
+    typical_hmax,
 ):
     def table_md(df, columns):
         rows = [
@@ -1580,18 +1337,14 @@ def _(
     M_{{\mathrm{{sat}}}}(T)\;\equiv\;\tfrac12\left|M_+(T,H{{=}}{{+}}H_{{\mathrm{{sat}}}})-M_-(T,H{{=}}{{-}}H_{{\mathrm{{sat}}}})\right|.
     $$
 
-    Same local-ODR machinery as Method I but evaluated near the loop's
+    Same local-ODR machinery as Method I but evaluated near each loop's
     saturation tips, mirroring the LabVIEW $V_y(V_{{x,\max}})$ trace.
-    We use $H^*_\mathrm{{sat}} = {H_SAT:.2f}$ in the uncalibrated relative-axis scale
-    ($\approx 0.98\,H^*_{{\max}}$ on the common branch amplitude
-    $H^*_{{\max}}={common_hmax:.2f}$), inboard
-    just enough to keep the local nearest-neighbour interpolation
-    well-posed at the loop edge. This is the guide's algebraic
-    Method II ("$B-H_{{\max}}=M$" at saturation, with $\alpha\to 0$).
-
-    Rows before $T={field_ready_temperature_K:.3f}\,\mathrm{{K}}$ are excluded
-    from Methods I, II, and III because the measured branch field amplitude
-    had not yet reached the stable drive-field plateau.
+    We use $H^*_\mathrm{{sat}}(T) = 0.98H^*_{{\max}}(T)$ in the uncalibrated
+    relative-axis scale; for series A the median values are
+    $H^*_\mathrm{{sat}}={H_SAT:.2f}$ and $H^*_{{\max}}={typical_hmax:.2f}$.
+    The 0.98 factor keeps the local nearest-neighbour interpolation
+    well-posed at the loop edge. This is the guide's algebraic Method II
+    ("$B-H_{{\max}}=M$" at saturation, with $\alpha\to 0$).
 
     **Method III: $M_0^{{\mathrm{{ext}}}}(T)$ — single-loop saturation tail, linearly extrapolated to $H=0$**
 
@@ -2023,19 +1776,15 @@ def _(
     TARGET_LOOP_TEMPERATURES_K,
     TEMPERATURE_K,
     data,
-    field_ready_temperature_K,
     np,
     pd,
     plt,
     remove_background,
     save_figure,
 ):
-    valid_loop_indices = np.flatnonzero(TEMPERATURE_K >= field_ready_temperature_K)
     selected_indices = []
     for target in TARGET_LOOP_TEMPERATURES_K:
-        _nearest = valid_loop_indices[
-            np.argmin(np.abs(TEMPERATURE_K[valid_loop_indices] - target))
-        ]
+        _nearest = int(np.argmin(np.abs(TEMPERATURE_K - target)))
         selected_indices.append(int(_nearest))
     selected_indices = sorted(set(selected_indices), key=lambda i: TEMPERATURE_K[i])
 
@@ -2160,7 +1909,6 @@ def _(
     B_PER_Y,
     DATA_FILE,
     H_PER_X,
-    H_SAT,
     Line2D,
     METHOD3_EXAMPLE_TEMPERATURE_K,
     MU0,
@@ -2169,7 +1917,6 @@ def _(
     background_slope,
     branches_for_row,
     data,
-    field_ready_temperature_K,
     linear_odr_fit,
     local_intercept_at,
     np,
@@ -2179,22 +1926,14 @@ def _(
     sat_intercept_plateau,
     save_figure,
 ):
-    _valid_loop_indices = np.flatnonzero(TEMPERATURE_K >= field_ready_temperature_K)
-    _example_i = int(
-        _valid_loop_indices[
-            np.argmin(
-                np.abs(
-                    TEMPERATURE_K[_valid_loop_indices] - METHOD3_EXAMPLE_TEMPERATURE_K
-                )
-            )
-        ]
-    )
+    _example_i = int(np.argmin(np.abs(TEMPERATURE_K - METHOD3_EXAMPLE_TEMPERATURE_K)))
     _example_T_K = float(TEMPERATURE_K[_example_i])
     _example_T_C = float(data["Temperature (C)"].iloc[_example_i])
 
     _H_pos, _M_pos, _H_neg, _M_neg = branches_for_row(data.iloc[_example_i])
     _M_pos_corr = remove_background(_H_pos, _M_pos)
     _M_neg_corr = remove_background(_H_neg, _M_neg)
+    _H_sat_example = 0.98 * min(float(_H_pos.max()), float(-_H_neg.min()))
     _h_to_m_factor = 1.0 + background_slope
     _b_over_mu0_per_y = B_PER_Y / MU0
 
@@ -2223,19 +1962,19 @@ def _(
     _M_pos_sat, _ = local_intercept_at(
         _H_pos,
         _M_pos_corr,
-        H_SAT,
+        _H_sat_example,
         h_to_m_factor=_h_to_m_factor,
     )
     _M_neg_sat, _ = local_intercept_at(
         _H_neg,
         _M_neg_corr,
-        -H_SAT,
+        -_H_sat_example,
         h_to_m_factor=_h_to_m_factor,
     )
 
     _H_method1 = np.array([0.0, 0.0])
     _M_method1 = np.array([_M_pos_0, _M_neg_0])
-    _H_method2 = np.array([H_SAT, -H_SAT])
+    _H_method2 = np.array([_H_sat_example, -_H_sat_example])
     _M_method2 = np.array([_M_pos_sat, _M_neg_sat])
 
     _b_pos, _sb_pos, _n_pos = sat_intercept_plateau(
@@ -2387,14 +2126,14 @@ def _(
     )
 
     _ax_tail.axvline(
-        _to_vx(H_SAT),
+        _to_vx(_H_sat_example),
         color=_method2_color,
         linewidth=1.05,
         linestyle=":",
         alpha=0.62,
     )
     _ax_tail.axvline(
-        _to_vx(-H_SAT),
+        _to_vx(-_H_sat_example),
         color=_method2_color,
         linewidth=1.05,
         linestyle=":",
@@ -2412,7 +2151,7 @@ def _(
         label=r"II: $M_{\mathrm{sat}}$",
     )
     _method2_xy = (
-        float(_to_vx(-H_SAT)),
+        float(_to_vx(-_H_sat_example)),
         float(np.min(_to_vy(_H_method2, _M_method2))),
     )
     _ax_tail.annotate(
@@ -2769,7 +2508,6 @@ def _(BREWER, Line2D, diagnostics, np, plt, save_figure, smooth, summary):
 @app.cell
 def _(
     DATA_XLSX,
-    FIELD_READY_FRACTION,
     MU0,
     RUN_FILES,
     fit_functions,
@@ -2840,14 +2578,9 @@ def _(
                 for i in range(len(df))
             ]
         )
-        plateau = float(np.median(hmax[len(hmax) // 2 :]))
-        ready = np.flatnonzero(hmax >= FIELD_READY_FRACTION * plateau)
-        if ready.size == 0:
-            return None, [], []
-        keep = np.arange(int(ready[0]), len(df))
-        T_retained = T_K[keep]
-        common_hmax = float(hmax[keep].min())
-        H_sat = 0.98 * common_hmax
+        keep = np.arange(len(df))
+        typical_hmax = float(np.median(hmax[keep]))
+        H_sat = 0.98 * typical_hmax
 
         # Use the top quartile of the full run as an empirical high-temperature
         # background, matching the main pipeline. This avoids a fixed
@@ -2886,17 +2619,18 @@ def _(
             M_r = 0.5 * abs(Mp_0 - Mn_0)
             sM_r = 0.5 * float(np.hypot(sp_0, sn_0))
 
+            H_sat_i = 0.98 * hmax[i]
             Mp_sat, sp_sat = local_intercept_at(
                 Hp,
                 Mp_c,
-                H_sat,
+                H_sat_i,
                 h_per_x=h_per_x,
                 h_to_m_factor=h_to_m_factor,
             )
             Mn_sat, sn_sat = local_intercept_at(
                 Hn,
                 Mn_c,
-                -H_sat,
+                -H_sat_i,
                 h_per_x=h_per_x,
                 h_to_m_factor=h_to_m_factor,
             )
@@ -2942,6 +2676,7 @@ def _(
                     "temperature_K": float(T_K[i]),
                     "sigma_T_K": float(sT[i]),
                     "branch_hmax_rel": float(hmax[i]),
+                    "H_sat_rel": float(H_sat_i),
                     "M_r_rel": float(M_r),
                     "sigma_M_r_rel": float(sM_r),
                     "M_sat_rel": float(M_sat),
@@ -3004,8 +2739,6 @@ def _(
                     "n_loops": int(len(keep)),
                     "T_min_K": float(T_K.min()),
                     "T_max_K": float(T_K.max()),
-                    "T_retained_min_K": float(T_retained.min()),
-                    "T_retained_max_K": float(T_retained.max()),
                 }
             )
 
@@ -3137,7 +2870,7 @@ def _(
                 {
                     "run": label,
                     "drive_current_A_rms": float(I_rms),
-                    "H_sat_rel": float(H_sat),
+                    "H_sat_rel": float(_record["H_sat_rel"]),
                     "H_median_rel": float(np.median(hmax[keep])),
                     "temperature_K": float(_record["temperature_K"]),
                     "sigma_T_K": float(_record["sigma_T_K"]),
@@ -3179,8 +2912,6 @@ def _(
                 "n_loops": int(len(keep)),
                 "T_min_K": float(T_K.min()),
                 "T_max_K": float(T_K.max()),
-                "T_retained_min_K": float(T_retained.min()),
-                "T_retained_max_K": float(T_retained.max()),
                 "redchi": redchi_mf,
             },
             method_rows,
@@ -3491,22 +3222,6 @@ def _(BREWER, RUN_FILES, cross_run, np, pd, plt, save_figure):
             label=_label,
         )
 
-        if not cross_run.loc[cross_run["run"] == _run].empty:
-            _ret_min = float(
-                cross_run.loc[cross_run["run"] == _run, "T_retained_min_K"].iloc[0]
-            )
-            _ready_idx = int(np.argmin(np.abs(_T - _ret_min)))
-            _ax_time.scatter(
-                _time_min[_ready_idx],
-                _T[_ready_idx],
-                s=28,
-                marker="o",
-                color=_color,
-                edgecolor="white",
-                linewidth=0.6,
-                zorder=3,
-            )
-
     _ax_time.set_xlabel(r"$t$ (min)")
     _ax_time.set_ylabel(r"$T$ (K)")
     if _all_time and _all_T:
@@ -3530,18 +3245,10 @@ def _(BREWER, RUN_FILES, cross_run, np, pd, plt, save_figure):
         _ax_range.plot(
             [_row["T_min_K"], _row["T_max_K"]],
             [_y, _y],
-            color="0.75",
-            linewidth=6.0,
-            solid_capstyle="round",
-            label="logged range" if _y == _y_positions[0] else None,
-        )
-        _ax_range.plot(
-            [_row["T_retained_min_K"], _row["T_retained_max_K"]],
-            [_y, _y],
             color=_color,
             linewidth=7.5,
             solid_capstyle="round",
-            label="retained range" if _y == _y_positions[0] else None,
+            label="used range" if _y == _y_positions[0] else None,
         )
         if np.isfinite(_row["Tc_K_methods_mean"]):
             _ax_range.errorbar(
@@ -3570,7 +3277,7 @@ def _(BREWER, RUN_FILES, cross_run, np, pd, plt, save_figure):
     _ax_range.legend(
         loc="upper center",
         bbox_to_anchor=(0.5, -0.28),
-        ncol=3,
+        ncol=2,
         fontsize=7.8,
         framealpha=0.95,
     )
@@ -3941,8 +3648,8 @@ def _(
         _name = r["run"]
         _frac = r.get("drive_fraction_vs_series_A", np.nan)
         _drive_str = f"{_frac:.2f}" if np.isfinite(_frac) else "—"
-        _t0 = r.get("T_retained_min_K", np.nan)
-        _t1 = r.get("T_retained_max_K", np.nan)
+        _t0 = r.get("T_min_K", np.nan)
+        _t1 = r.get("T_max_K", np.nan)
         _t_range = (
             f"{_t0:.1f}-{_t1:.1f}" if np.isfinite(_t0) and np.isfinite(_t1) else "—"
         )
@@ -3978,10 +3685,10 @@ def _(
         if "run" in finite_runs.columns
         else finite_runs.iloc[0:0]
     )
-    if not _series_C.empty and "T_retained_min_K" in _series_C.columns:
-        series_C_retained_min = float(_series_C["T_retained_min_K"].iloc[0])
+    if not _series_C.empty and "T_min_K" in _series_C.columns:
+        series_C_used_min = float(_series_C["T_min_K"].iloc[0])
     else:
-        series_C_retained_min = float("nan")
+        series_C_used_min = float("nan")
 
     method_rows = [
         f"| {r['method']} | {r['Tc_K']:.2f} | {r['sigma_Tc_K']:.2f} | (half-height local ODR) |"
@@ -4003,14 +3710,14 @@ def _(
 
     **All three physical Curie scans** (repeated at different primary drive settings):
 
-    | Run | $I_\mathrm{{rms}}$ (A) | drive frac. | retained $T$ (K) | $M_{{\mathrm{{r}}}}$ (K) | $M_{{\mathrm{{sat}}}}$ (K) | $M_0$ (K) | method mean (K) | status |
+    | Run | $I_\mathrm{{rms}}$ (A) | drive frac. | $T$ range (K) | $M_{{\mathrm{{r}}}}$ (K) | $M_{{\mathrm{{sat}}}}$ (K) | $M_0$ (K) | method mean (K) | status |
     |---|---|---|---|---|---|---|---|---|
     {chr(10).join(cross_rows_methods)}
 
     The low-drive series C scan is not an interchangeable repeat: it is the
     required different-resistance scan and shows field-amplitude and coverage
-    sensitivity. After the field-ready cut it starts at
-    `{series_C_retained_min:.1f}` K, so it lacks the cold plateau present in the
+    sensitivity. Its measured span starts at
+    `{series_C_used_min:.1f}` K, so it lacks the cold plateau present in the
     series A and series B scans. The preferred high-drive run-spread term uses
     only series A and series B, while the conservative all-drive envelope retains all three
     scans:
