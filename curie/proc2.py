@@ -142,7 +142,7 @@ def _(mo):
 def _(SIGMA_Y_V, curve_fit, np):
     def sorted_channel_columns(df, prefix):
         cols = [c for c in df.columns if c.startswith(prefix)]
-        return sorted(cols, key=lambda c: int(c[len(prefix):]))
+        return sorted(cols, key=lambda c: int(c[len(prefix) :]))
 
     def _y_at_zero(x, y, sigma_y):
         x = np.asarray(x, dtype=float)
@@ -239,8 +239,12 @@ def _(SIGMA_Y_V, curve_fit, np):
         y_neg_sat = np.asarray(y_neg[idx_neg_edge], dtype=float)
         mean_pos_sat = float(np.mean(y_pos_sat))
         mean_neg_sat = float(np.mean(y_neg_sat))
-        s_pos_sat = np.sqrt(np.var(y_pos_sat, ddof=1) / len(y_pos_sat) + SIGMA_Y_V**2 / len(y_pos_sat))
-        s_neg_sat = np.sqrt(np.var(y_neg_sat, ddof=1) / len(y_neg_sat) + SIGMA_Y_V**2 / len(y_neg_sat))
+        s_pos_sat = np.sqrt(
+            np.var(y_pos_sat, ddof=1) / len(y_pos_sat) + SIGMA_Y_V**2 / len(y_pos_sat)
+        )
+        s_neg_sat = np.sqrt(
+            np.var(y_neg_sat, ddof=1) / len(y_neg_sat) + SIGMA_Y_V**2 / len(y_neg_sat)
+        )
         m2 = 0.5 * (mean_pos_sat - mean_neg_sat)
         s2 = 0.5 * np.sqrt(s_pos_sat**2 + s_neg_sat**2)
 
@@ -272,8 +276,12 @@ def _(SIGMA_Y_V, curve_fit, np):
     def extract_chi_near_zero(x_pos, y_pos, x_neg, y_neg, window_fraction=0.20):
         h_max = max(np.max(np.abs(x_pos)), np.max(np.abs(x_neg)))
         h_cut = window_fraction * h_max
-        x_all = np.concatenate([x_pos[np.abs(x_pos) <= h_cut], x_neg[np.abs(x_neg) <= h_cut]])
-        y_all = np.concatenate([y_pos[np.abs(x_pos) <= h_cut], y_neg[np.abs(x_neg) <= h_cut]])
+        x_all = np.concatenate(
+            [x_pos[np.abs(x_pos) <= h_cut], x_neg[np.abs(x_neg) <= h_cut]]
+        )
+        y_all = np.concatenate(
+            [y_pos[np.abs(x_pos) <= h_cut], y_neg[np.abs(x_neg) <= h_cut]]
+        )
         if len(x_all) < 8:
             return np.nan, np.nan
 
@@ -452,7 +460,9 @@ def _(
             m3[i], s3[i] = out["m3"], out["s3"]
             tail_points[i] = 0.5 * (out["n_tail_pos"] + out["n_tail_neg"])
 
-            chi0[i], schi0[i] = extract_chi_near_zero(X_pos[i], Y_pos[i], X_neg[i], Y_neg[i])
+            chi0[i], schi0[i] = extract_chi_near_zero(
+                X_pos[i], Y_pos[i], X_neg[i], Y_neg[i]
+            )
 
         # --- DATA CLEANING (Automated Cutoffs & Outliers) ---
         # 1. Automated Cutoff: Series C is unstable before reaching its magnetic peak.
@@ -460,7 +470,7 @@ def _(
         if _series_name == "series C":
             # Detect the peak on a smoothed version of M3 (the cleanest proxy)
             m3_filled = np.nan_to_num(m3, nan=np.nanmedian(m3))
-            m3_smooth = np.convolve(m3_filled, np.ones(5)/5, mode='same')
+            m3_smooth = np.convolve(m3_filled, np.ones(5) / 5, mode="same")
             start_idx = int(np.argmax(m3_smooth))
         else:
             start_idx = min(4, n_loops)
@@ -556,22 +566,27 @@ def _(SERIES_ORDER, mo, np, series_data):
     """Create temperature range sliders for filtering each series"""
     # Use mo.ui.dictionary to create a reactive group of sliders.
     # This allows marimo to notify downstream cells whenever any slider changes.
-    sliders = mo.ui.dictionary({
-        name: mo.ui.range_slider(
-            value=(float(np.min(series_data[name]["T_K"])), float(np.max(series_data[name]["T_K"]))),
-            start=float(np.min(series_data[name]["T_K"])),
-            stop=float(np.max(series_data[name]["T_K"])),
-            step=0.5,
-            label=f"{name}: [K]"
-        )
-        for name in SERIES_ORDER
-    })
+    sliders = mo.ui.dictionary(
+        {
+            name: mo.ui.range_slider(
+                value=(
+                    float(np.min(series_data[name]["T_K"])),
+                    float(np.max(series_data[name]["T_K"])),
+                ),
+                start=float(np.min(series_data[name]["T_K"])),
+                stop=float(np.max(series_data[name]["T_K"])),
+                step=0.5,
+                label=f"{name}: [K]",
+            )
+            for name in SERIES_ORDER
+        }
+    )
 
     # Construct a display layout. Returning this object as the cell's result
     # ensures it is rendered as interactive HTML in the notebook.
-    slider_display = mo.vstack([
-        mo.vstack([mo.md(f"**{name}**"), sliders[name]]) for name in SERIES_ORDER
-    ])
+    slider_display = mo.vstack(
+        [mo.vstack([mo.md(f"**{name}**"), sliders[name]]) for name in SERIES_ORDER]
+    )
     slider_display  # type: ignore
     return (sliders,)
 
@@ -616,8 +631,7 @@ def _(SERIES_ORDER, filtered_series_data, mo, np, part_a_summary_df, pd):
             }
         )
     prep_df = pd.DataFrame(prep_rows)
-    mo.md(
-        f"""
+    mo.md(f"""
     **Setup summary**
 
     {prep_df.to_markdown(index=False)}
@@ -625,8 +639,7 @@ def _(SERIES_ORDER, filtered_series_data, mo, np, part_a_summary_df, pd):
     **Part A short table (normalized-curve midpoint and raw dynamic range)**
 
     {part_a_summary_df.to_markdown(index=False, floatfmt=".3f")}
-    """
-    )
+    """)
     return
 
 
@@ -749,7 +762,9 @@ def _(SERIES_ORDER, filtered_series_data, fit_curie_weiss, fit_far_field, pd):
                 }
             )
 
-        cw = fit_curie_weiss(_T, _d["chi0"], _d["chi0_sigma"], Tc_seed=ff["Tc"] if ff["ok"] else 215.0)
+        cw = fit_curie_weiss(
+            _T, _d["chi0"], _d["chi0_sigma"], Tc_seed=ff["Tc"] if ff["ok"] else 215.0
+        )
         fit_results["curie_weiss"][_series_name] = cw
         if cw["ok"]:
             fit_rows.append(
@@ -782,7 +797,10 @@ def _(SERIES_ORDER, filtered_series_data, fit_curie_weiss, fit_far_field, pd):
 def _(SERIES_ORDER, fit_results, np, pd):
     def _():
         comparison_rows = []
-        for method_key, method_label in [("far_field", "Far-field"), ("curie_weiss", "Curie-Weiss")]:
+        for method_key, method_label in [
+            ("far_field", "Far-field"),
+            ("curie_weiss", "Curie-Weiss"),
+        ]:
             vals = []
             sigs = []
             chi2s = []
@@ -820,6 +838,7 @@ def _(SERIES_ORDER, fit_results, np, pd):
             )
 
         return comparison_rows
+
     comparison_rows = _()
     comparison_df = pd.DataFrame(comparison_rows)
     return (comparison_df,)
@@ -842,7 +861,9 @@ def _(comparison_df, fit_table_df, mo):
 @app.cell
 def _(COLORS, SERIES_ORDER, fit_results, np, plt):
     def _():
-        fig, axs = plt.subplots(2, 3, figsize=(13.0, 6.2), sharex="col", gridspec_kw={"height_ratios": [3, 1]})
+        fig, axs = plt.subplots(
+            2, 3, figsize=(13.0, 6.2), sharex="col", gridspec_kw={"height_ratios": [3, 1]}
+        )
         for j, _series_name in enumerate(SERIES_ORDER):
             res = fit_results["far_field"][_series_name]
             ax_top = axs[0, j]
@@ -858,8 +879,17 @@ def _(COLORS, SERIES_ORDER, fit_results, np, plt):
                 A = res["A"]
                 yline = A * np.sqrt(np.clip(Tc - xline, 0.0, None))
 
-                ax_top.errorbar(Tf, yf, yerr=sf, fmt="o", ms=3, color=COLORS["data"], label="data")
-                ax_top.plot(xline, yline, "-", color=COLORS["fit"], lw=1.5, label=f"fit Tc={Tc:.2f} K")
+                ax_top.errorbar(
+                    Tf, yf, yerr=sf, fmt="o", ms=3, color=COLORS["data"], label="data"
+                )
+                ax_top.plot(
+                    xline,
+                    yline,
+                    "-",
+                    color=COLORS["fit"],
+                    lw=1.5,
+                    label=f"fit Tc={Tc:.2f} K",
+                )
                 ax_top.set_title(f"{_series_name} | Far-field")
                 ax_top.set_ylabel("M (normalized)")
                 ax_top.legend(loc="best", fontsize=8)
@@ -872,7 +902,14 @@ def _(COLORS, SERIES_ORDER, fit_results, np, plt):
                 ax_top.set_title(f"{_series_name} | Far-field (fit failed)")
                 ax_bot.set_xlabel("Temperature [K]")
                 ax_bot.set_ylabel("res/σ")
-                ax_top.text(0.5, 0.5, "No stable fit", ha="center", va="center", transform=ax_top.transAxes)
+                ax_top.text(
+                    0.5,
+                    0.5,
+                    "No stable fit",
+                    ha="center",
+                    va="center",
+                    transform=ax_top.transAxes,
+                )
         fig.tight_layout()
         return fig
 
@@ -883,7 +920,9 @@ def _(COLORS, SERIES_ORDER, fit_results, np, plt):
 @app.cell
 def _(COLORS, SERIES_ORDER, fit_results, np, plt):
     def _():
-        fig, axs = plt.subplots(2, 3, figsize=(13.0, 6.2), sharex="col", gridspec_kw={"height_ratios": [3, 1]})
+        fig, axs = plt.subplots(
+            2, 3, figsize=(13.0, 6.2), sharex="col", gridspec_kw={"height_ratios": [3, 1]}
+        )
         for j, _series_name in enumerate(SERIES_ORDER):
             res = fit_results["curie_weiss"][_series_name]
             ax_top = axs[0, j]
@@ -899,8 +938,17 @@ def _(COLORS, SERIES_ORDER, fit_results, np, plt):
                 C = res["C"]
                 yline = (xline - Tc) / C
 
-                ax_top.errorbar(Tf, yf, yerr=sf, fmt="o", ms=3, color=COLORS["data"], label="data")
-                ax_top.plot(xline, yline, "-", color=COLORS["fit"], lw=1.5, label=f"fit Tc={Tc:.2f} K")
+                ax_top.errorbar(
+                    Tf, yf, yerr=sf, fmt="o", ms=3, color=COLORS["data"], label="data"
+                )
+                ax_top.plot(
+                    xline,
+                    yline,
+                    "-",
+                    color=COLORS["fit"],
+                    lw=1.5,
+                    label=f"fit Tc={Tc:.2f} K",
+                )
                 ax_top.set_title(f"{_series_name} | Curie-Weiss")
                 ax_top.set_ylabel("1/χ (arb. units)")
                 ax_top.legend(loc="best", fontsize=8)
@@ -913,7 +961,14 @@ def _(COLORS, SERIES_ORDER, fit_results, np, plt):
                 ax_top.set_title(f"{_series_name} | Curie-Weiss (fit failed)")
                 ax_bot.set_xlabel("Temperature [K]")
                 ax_bot.set_ylabel("res/σ")
-                ax_top.text(0.5, 0.5, "No stable fit", ha="center", va="center", transform=ax_top.transAxes)
+                ax_top.text(
+                    0.5,
+                    0.5,
+                    "No stable fit",
+                    ha="center",
+                    va="center",
+                    transform=ax_top.transAxes,
+                )
         fig.tight_layout()
         return fig
 
@@ -928,22 +983,23 @@ def _(comparison_df, mo):
 
     ff_good = (
         row_ff["Median chi2/dof"] < row_cw["Median chi2/dof"]
-        if (row_ff["Median chi2/dof"] == row_ff["Median chi2/dof"] and row_cw["Median chi2/dof"] == row_cw["Median chi2/dof"])
+        if (
+            row_ff["Median chi2/dof"] == row_ff["Median chi2/dof"]
+            and row_cw["Median chi2/dof"] == row_cw["Median chi2/dof"]
+        )
         else True
     )
     best = "Far-field" if ff_good else "Curie-Weiss"
     best_row = row_ff if ff_good else row_cw
 
-    mo.md(
-        f"""
+    mo.md(f"""
     ## Bottom line
 
     - Preferred method for final report: **{best}**
     - Recommended Curie temperature estimate: **Tc = {best_row["Weighted Tc [K]"]:.2f} ± {best_row["Weighted sigma [K]"]:.2f} K**
 
     This selection is based on the better residual behavior (lower median reduced chi-squared) and consistency across the three series.
-    """
-    )
+    """)
     return
 
 
