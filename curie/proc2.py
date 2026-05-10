@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.1"
+__generated_with = "0.23.5"
 app = marimo.App(
     width="medium",
     app_title="Curie temperature analysis (proc3)",
@@ -167,9 +167,58 @@ def _(SIGMA_Y_V, curve_fit, np):
         sigma_intercept = float(np.sqrt(cov[1, 1]))
         return slope, intercept, sigma_slope, sigma_intercept
 
-    def extract_loop_methods(x_pos, y_pos, x_neg, y_neg, tail_fraction=0.18, edge_fraction=0.12):
+    def _tail_linearity_rms(x, y):
+        if len(x) < 3:
+            return np.inf
+        slope, intercept, _, _ = _weighted_line_fit(x, y, SIGMA_Y_V)
+        residuals = (y - (slope * x + intercept)) / SIGMA_Y_V
+        return float(np.sqrt(np.mean(residuals**2)))
+
+    def _adaptive_tail_indices(
+        x,
+        y,
+        side,
+        min_points=5,
+        max_fraction=0.35,
+        residual_sigma_max=2.2,
+        residual_growth=0.25,
+    ):
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        n = len(x)
+        if n <= min_points:
+            return np.arange(n, dtype=int)
+
+        max_points = max(min_points, int(np.ceil(max_fraction * n)))
+        max_points = min(max_points, n)
+
+        order = np.argsort(x)
+        if side == "pos":
+            ordered = order[::-1]
+        else:
+            ordered = order
+
+        selected = list(ordered[:min_points])
+        x_sel = np.asarray(x[selected], dtype=float)
+        y_sel = np.asarray(y[selected], dtype=float)
+        curr_rms = _tail_linearity_rms(x_sel, y_sel)
+
+        for cand in ordered[min_points:max_points]:
+            trial = selected + [int(cand)]
+            x_try = np.asarray(x[trial], dtype=float)
+            y_try = np.asarray(y[trial], dtype=float)
+            trial_rms = _tail_linearity_rms(x_try, y_try)
+            allowed = max(residual_sigma_max, curr_rms * (1.0 + residual_growth))
+            if trial_rms <= allowed:
+                selected = trial
+                curr_rms = trial_rms
+            else:
+                break
+
+        return np.asarray(selected, dtype=int)
+
+    def extract_loop_methods(x_pos, y_pos, x_neg, y_neg, edge_fraction=0.12):
         n = len(x_pos)
-        n_tail = max(8, int(np.ceil(tail_fraction * n)))
         n_edge = max(6, int(np.ceil(edge_fraction * n)))
 
         # Method 1: value at H=0 (loop opening)
@@ -190,9 +239,9 @@ def _(SIGMA_Y_V, curve_fit, np):
         m2 = 0.5 * (mean_pos_sat - mean_neg_sat)
         s2 = 0.5 * np.sqrt(s_pos_sat**2 + s_neg_sat**2)
 
-        # Method 3: linear fit to high-field tails, then intercept at H=0
-        idx_pos_tail = np.argsort(x_pos)[-n_tail:]
-        idx_neg_tail = np.argsort(x_neg)[:n_tail]
+        # Method 3: adaptive tail fit from extreme fields toward the center.
+        idx_pos_tail = _adaptive_tail_indices(x_pos, y_pos, side="pos")
+        idx_neg_tail = _adaptive_tail_indices(x_neg, y_neg, side="neg")
         x_pos_tail = np.asarray(x_pos[idx_pos_tail], dtype=float)
         y_pos_tail = np.asarray(y_pos[idx_pos_tail], dtype=float)
         x_neg_tail = np.asarray(x_neg[idx_neg_tail], dtype=float)
@@ -210,7 +259,8 @@ def _(SIGMA_Y_V, curve_fit, np):
             "s2": float(s2),
             "m3": float(m3),
             "s3": float(s3),
-            "n_tail": int(n_tail),
+            "n_tail_pos": int(len(idx_pos_tail)),
+            "n_tail_neg": int(len(idx_neg_tail)),
             "n_edge": int(n_edge),
         }
 
@@ -395,7 +445,7 @@ def _(
             m1[i], s1[i] = out["m1"], out["s1"]
             m2[i], s2[i] = out["m2"], out["s2"]
             m3[i], s3[i] = out["m3"], out["s3"]
-            tail_points[i] = out["n_tail"]
+            tail_points[i] = 0.5 * (out["n_tail_pos"] + out["n_tail_neg"])
 
             chi0[i], schi0[i] = extract_chi_near_zero(X_pos[i], Y_pos[i], X_neg[i], Y_neg[i])
 
@@ -498,7 +548,7 @@ def _(mo):
     For each measurement series (A, B, C), one graph is shown with all three normalized \(M(T)\) curves:
     1. **Method 1**: loop intersection at \(H=0\)
     2. **Method 2**: saturation-edge values
-    3. **Method 3**: linear fit to saturation tails and extrapolation to \(H=0\)
+    3. **Method 3**: adaptive linear fit to saturation tails and extrapolation to \(H=0\)
     """)
     return
 
