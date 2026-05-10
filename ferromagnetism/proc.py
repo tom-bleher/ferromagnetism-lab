@@ -736,7 +736,6 @@ def _(FIG_DIR, RUNS, fits, np, plt):
 
     def _draw(sheet, f):
         style = RUNS[sheet]
-        r = f["result"]
         Lp_mm, sx_mm = f["x"] * 1e3, f["sx"] * 1e3
         slope_NIB = f["slope"].value
         intercept_NIB = f["intercept"].value

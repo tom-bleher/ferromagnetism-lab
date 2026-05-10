@@ -1557,18 +1557,6 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, pd, summary):
         fit_mask[best["_sel"]] = True
         K_best = int(best["K"])
 
-    K_scan_table = pd.DataFrame(
-        [
-            {
-                "K": r["K"],
-                "Tc_K": r["Tc_K"],
-                "redchi": r["redchi"],
-                "p_value": r["p_value"],
-            }
-            for r in K_scan_records
-        ]
-    )
-
     if odr_result is None:
         raise RuntimeError("No physically acceptable M0_ext^2 mean-field fit window found.")
 
@@ -1590,7 +1578,6 @@ def _(diagnostics_with_sigma, fit_functions, np, odr_fit, pd, summary):
         msq_sigma_intercept = float(odr_result.errors[0])
         msq_sigma_slope = float(odr_result.errors[1])
         msq_cov_si = 0.0
-    rescale = float(np.sqrt(odr_cov_scale))
 
     Tc_K = -msq_intercept / msq_slope
     var_Tc = (
@@ -1788,7 +1775,6 @@ def _(
         selected_indices.append(int(_nearest))
     selected_indices = sorted(set(selected_indices), key=lambda i: TEMPERATURE_K[i])
 
-    loop_temperatures = TEMPERATURE_K[selected_indices]
     palette = [
         BREWER["teal"],
         BREWER["orange"],
@@ -1927,7 +1913,6 @@ def _(
     save_figure,
 ):
     _example_i = int(np.argmin(np.abs(TEMPERATURE_K - METHOD3_EXAMPLE_TEMPERATURE_K)))
-    _example_T_K = float(TEMPERATURE_K[_example_i])
     _example_T_C = float(data["Temperature (C)"].iloc[_example_i])
 
     _H_pos, _M_pos, _H_neg, _M_neg = branches_for_row(data.iloc[_example_i])
@@ -1998,12 +1983,12 @@ def _(
     _M_neg_tail = _M_neg_corr[_neg_tail_order]
     _fit_pos = linear_odr_fit(_H_pos_tail, _M_pos_tail, h_to_m_factor=_h_to_m_factor)
     _fit_neg = linear_odr_fit(_H_neg_tail, _M_neg_tail, h_to_m_factor=_h_to_m_factor)
-    _a_pos, _b_pos_fit, _cov_pos = (
+    _a_pos, _b_pos_fit, _ = (
         _fit_pos["slope"],
         _fit_pos["intercept"],
         _fit_pos["cov"],
     )
-    _a_neg, _b_neg_fit, _cov_neg = (
+    _a_neg, _b_neg_fit, _ = (
         _fit_neg["slope"],
         _fit_neg["intercept"],
         _fit_neg["cov"],
@@ -3489,7 +3474,6 @@ def _(
     sigma_Tc_CW = float("nan")
     b_CW = m_CW = float("nan")
     redchi_CW = float("nan")
-    rescale_CW = 1.0
     if mask_CW.sum() >= 5:
         _inv_chi = 1.0 / chi_vals[mask_CW]
         _sigma_inv_chi = sigma_chi_vals[mask_CW] / chi_vals[mask_CW] ** 2
@@ -3514,7 +3498,6 @@ def _(
                 getattr(cw_result.raw_output, "res_var", redchi_CW)
             )
             cov_scale_CW = max(raw_cov_scale_CW, 1.0)
-            rescale_CW = float(np.sqrt(cov_scale_CW))
             if cw_result.cov is not None:
                 _cov_CW = cw_result.cov * cov_scale_CW
                 sb_CW = float(np.sqrt(max(_cov_CW[0, 0], 0.0)))
@@ -3571,19 +3554,12 @@ def _(
         # below. The chi^2/nu scale factor is kept only as a diagnostic;
         # applying that factor here and also adding method_spread as a
         # systematic would double-count the same disagreement.
-        if len(hh_tcs) >= 2:
-            chi2_combine = float(np.sum((hh_tcs - Tc_headline) ** 2 * _w))
-            dof_combine = len(hh_tcs) - 1
-            redchi_combine = chi2_combine / dof_combine if dof_combine > 0 else 1.0
-        else:
-            redchi_combine = 1.0
         sigma_Tc_headline_stat = sigma_Tc_headline_stat_unrescaled
     else:
         Tc_headline = float("nan")
         sigma_Tc_headline_stat_unrescaled = float("nan")
         sigma_Tc_headline_stat = float("nan")
         method_spread = 0.0
-        redchi_combine = float("nan")
 
     _run_estimator_col = (
         "Tc_K_methods_mean" if "Tc_K_methods_mean" in cross_run.columns else "Tc_K_half"
@@ -3895,7 +3871,7 @@ def _(
             ecolor=BREWER["orange"],
             capsize=3,
             markersize=6,
-            label=rf"mean-field",
+            label=r"mean-field",
         )
         _x_positions.append(_x)
         _x_labels.append(r"MF")
