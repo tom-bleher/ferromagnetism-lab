@@ -19,22 +19,33 @@ def _(mo):
     mo.md(r"""
     # Curie temperature analysis (clean notebook)
 
-    This notebook rebuilds the Curie analysis from scratch with a clean, reproducible pipeline.
+    This notebook implements the analysis for the Curie temperature of a Monel sample using three measurement series (A, B, and C). The goal is to extract the apparent transition temperature $T_c$ by observing the loss of spontaneous magnetization as the sample is heated.
 
     **Data Cleaning & Processing**
-    1. Setup and data preparation (including units and uncertainties)
-    2. **Handling Instabilities**: Measurement C is automatically clipped to the region after its magnetization peak to remove initial stabilization instability.
-    3. **Outlier Removal**: Singular anomalies are detected via a robust Hampel filter.
-    4. **Heating Rate Cutoff**: High-temperature points where the heating rate stalls (e.g., thermal equilibrium loss) are removed to ensure Curie-Weiss linearity.
-    5. Part A: extraction of magnetization proxies (M1, M2, M3) from loop geometries.
-    5. **Rough Tc Estimation**: Numerical second-derivatives are used to find the transition inflection point.
-    6. Part B: Refined Curie temperature extraction using restricted temperature regimes.
+    1. **Calibration**: Scope voltages are converted to field proxies using $N_1=250$ (primary), $N_2=2500$ (secondary), and an RC integrator ($R_y=3.97\,\mathrm{k\Omega}, C=19.78\,\mathrm{\mu F}$).
+    2. **Handling Instabilities**: Series C is automatically clipped to the region *after* its initial magnetization peak to remove start-up noise.
+    3. **Outlier Removal**: A robust **Hampel filter** (7-point rolling median) identifies singular anomalies deviating by $>4.8\times$ the Median Absolute Deviation (MAD).
+    4. **Heating Rate Cutoff**: To prevent thermal lag errors at high temperatures, data is clipped if the heating rate $dT/dt$ drops below $20\%$ of the median run rate.
+    5. **Magnetization Proxies**: Three methods (Remanence, Saturation-edge, and Tail-extrapolation) are used to extract a per-loop order parameter $M(T)$.
+    6. **Rough $T_c$ Estimation**: The peak of the numerical second derivative $\frac{d^2M}{dT^2}$ provides a model-independent inflection point estimate.
+    7. **Refined Fits**: Curie temperature is extracted via a Mean-field fit ($M \propto \sqrt{T_c - T}$) and a Curie-Weiss fit ($1/\chi \propto T - T_c$) in strictly defined physical regimes.
 
     **Notation**
-    - \(T\): temperature in Kelvin
-    - \(H\): external field proxy (oscilloscope X channel, volts)
-    - \(B\): total field proxy (oscilloscope Y channel, volts)
-    - \(M\): magnetization proxy extracted from hysteresis geometry
+    - $T$: Temperature in Kelvin.
+    - $H \propto X$: External field proxy (Volts).
+    - $B \propto Y$: Magnetic flux proxy (Volts).
+    - $M$: Magnetization proxy.
+
+    **Uncertainty Treatment**
+    Uncertainties are propagated using the partial derivative rule.
+    - **Temperature**: Combined thermometer accuracy $\pm(0.1\% \text{rdg} + 1\,\mathrm{K})$, $1\,\mathrm{mK}$ digitization, and finite-time drift ($|dT/dt| \Delta t / \sqrt{12}$).
+    - **Field**: Scope digitization uncertainty is modeled as a uniform distribution (quantization step / $\sqrt{12}$).
+
+    **Integrator Validity**
+    The circuit is a valid integrator when $\omega RC \gg 1$. At $50\,\mathrm{Hz}$ drive:
+    $$\tau = RC \approx 78\,\mathrm{ms} \gg T_{\text{drive}} = 20\,\mathrm{ms}$$
+    $$\omega\tau \approx 24.6$$
+    This corresponds to a gain error of $<0.1\%$ and a phase departure of $\approx 2.3^\circ$.
     """)
     return
 
@@ -119,24 +130,21 @@ def _(mo):
     mo.md(r"""
     ## Setup details and preprocessing
 
-    **Data preparation done here**
-    - Loaded all three measurement series (`series A/B/C`) from `curie/data`.
-    - Converted temperature from Celsius to Kelvin using \(T_K = T_C + 273.15\).
-    - Kept the native oscilloscope channels as field proxies:
-      - X channel \(\propto H\)
-      - Y channel \(\propto B\)
-    - **Automated Cleaning Applied**:
-      - **Series C instability**: The measurement is clipped to the region *after* the initial magnetization peak to skip stabilization noise.
-      - **Outliers**: Singular anomalies are identified using a 7-point rolling median threshold (Hampel filter) and removed from the extraction.
-      - **Stagnation Filter**: Data is clipped when the heating rate $dT/dt$ drops below 20% of the median rate to avoid thermal lag errors at high temperatures.
-    - Built per-loop uncertainty arrays:
-      - \(\sigma_T\): thermometer spec + temperature-resolution + finite-time drift
-      - \(\sigma_X, \sigma_Y\): digitization uncertainty (uniform quantization model)
+    **Data Cleaning Pipeline**
 
-    **Uncertainty scope**
-    - Random/statistical uncertainties are propagated through extraction and fits.
-    - Hardware calibration systematics (component tolerances) are not provided in the guide;
-      therefore they are not included in the numeric propagation below.
+    To ensure the robustness of the Curie temperature fits, the following automated filters are applied:
+
+    1. **Series C Leading-Edge Clip**: Series C shows significant instability during the initial current ramp-up. We detect the magnetization peak using a 5-point moving average and discard all points preceding it.
+    2. **Hampel Filter (Outlier Detection)**: We compute a 7-point rolling median of the magnetization. A point $M_i$ is flagged as an anomaly if:
+       $|M_i - \text{median}| > 4.8 \times \text{MAD}$
+       where MAD is the Median Absolute Deviation. This effectively removes singular digitization spikes or thermal noise without smoothing the underlying transition curve.
+    3. **Thermal Stagnation Filter**: As the heater reaches its limit, the heating rate $dT/dt$ stalls. This creates a non-equilibrium state between the sample and the probe. We calculate the median heating rate and discard any points at the end of the run where the rate drops below $20\%$ of this median.
+    4. **Background Subtraction**: To isolate the ferromagnetic signal, we fit a linear paramagnetic background ($\chi_{\text{bg}} \cdot H + b$) to the top $25\%$ (highest temperature) of the data. This background is subtracted from all magnetization proxies before normalization.
+
+    **Normalization**
+    All proxies are normalized to the range $[0, 1]$ using:
+    $$M_{\text{norm}} = \frac{M - M_{\text{min}}}{M_{\text{max}} - M_{\text{min}}}$$
+    This enables comparing different extraction methods on a common scale.
     """)
     return
 
@@ -703,12 +711,24 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Part A — Magnetization curves from three extraction methods
+    ## Part A — Magnetization extraction methods
 
-    For each measurement series (A, B, C), one graph is shown with all three normalized \(M(T)\) curves:
-    1. **Method 1**: loop intersection at \(H=0\)
-    2. **Method 2**: saturation-edge values
-    3. **Method 3**: adaptive linear fit to saturation tails and extrapolation to \(H=0\)
+    To cancel common-mode DC offsets on the Y-channel, all magnetization proxies are calculated as the **half-difference** of the upper ($M_+$) and lower ($M_-$) branches of a single hysteresis loop:
+    $$M = \frac{1}{2}|M_+ - M_-|$$
+
+    We compare three methods of extraction:
+
+    1.  **Method 1 (Remanence at $H=0$)**:
+        Reads the loop opening at exactly zero field. We use a local linear interpolation between the two points bracketing $H=0$.
+
+    2.  **Method 2 (Saturation Edges)**:
+        Reads the magnetization at the loop's extreme field tips ($H \approx \pm H_{\text{max}}$). We average the outermost $12\%$ of the samples to improve Signal-to-Noise Ratio (SNR).
+
+    3.  **Method 3 (Adaptive Tail Extrapolation)**:
+        Fits a straight line to the saturated "tails" of the loop. To find the linear regime automatically, we start from the tip and grow the window inward as long as the fit residuals stay below $2.2\sigma$. The magnetization $M_0^{\text{ext}}$ is then defined as the $H=0$ intercept of this tail fit.
+
+    **Rough $T_c$ Estimate**
+    Before performing non-linear fits, we calculate a "Rough $T_c$" by finding the peak of the numerical second derivative of Method 3. This identifies the inflection point where the system's curvature changes most rapidly as it enters the paramagnetic tail.
     """)
     return
 
@@ -772,16 +792,15 @@ def _(mo):
     mo.md(r"""
     ## Part B — Curie temperature extraction
 
-    Two fitting methods are applied to each series:
-    1. **Far-field (mean-field near transition):** \(M(T)=A\sqrt{T_C-T}\)
-    2. **Curie-Weiss:** \(1/\chi(T)=(T-T_C)/C\)
+    We apply two models to the magnetization proxy (Method 3) to determine the Curie temperature $T_c$:
+
+    1.  **Far-field (Mean-field) Fit**:
+        Valid near the transition from below ($T < T_c$). We fit the power law $M(T) = A\sqrt{T_c - T}$. To avoid saturation at low temperatures and the finite-field "smearing" above the transition, the fit is restricted to the regime $M < 0.9$ and $T < T_{c,\text{rough}} - 1.5\,\mathrm{K}$.
+
+    2.  **Curie-Weiss Fit**:
+        Valid in the paramagnetic regime ($T > T_c$). We fit the inverse susceptibility $1/\chi(T) = (T - T_c)/C$. To ensure we are far from critical fluctuations near $T_c$, we only use points where $T > 1.25 \times T_{c,\text{rough}}$.
 
     The requested third option (second-derivative divergence) is skipped here because the finite-point numerical second derivative is too unstable for these datasets and gives non-robust \(T_C\) estimates.
-
-    **Regime Selection (Data Cutting)**
-    The physical models are only valid in specific temperature regimes. To ensure robust fits, points outside these regimes are automatically masked:
-    - **Far-field**: Only uses points where \(0.05 < M < 0.9\) to avoid saturation at low-T and finite-field smearing near \(T_c\).
-    - **Curie-Weiss**: Only uses points far away from the transition (\(T > 1.25 \times T_{c,\text{rough}}\)) to ensure the system is purely in the paramagnetic state.
 
     The plots below show the full slider-filtered range in light gray for context.
     """)
