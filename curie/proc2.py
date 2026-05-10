@@ -19,33 +19,23 @@ def _(mo):
     mo.md(r"""
     # Curie temperature analysis (clean notebook)
 
-    This notebook implements the analysis for the Curie temperature of a Monel sample using three measurement series (A, B, and C). The goal is to extract the apparent transition temperature $T_c$ by observing the loss of spontaneous magnetization as the sample is heated.
+    This notebook rebuilds the Curie analysis from scratch with a clean, reproducible pipeline.
 
     **Data Cleaning & Processing**
-    1. **Calibration**: Scope voltages are converted to field proxies using $N_1=250$ (primary), $N_2=2500$ (secondary), and an RC integrator ($R_y=3.97\,\mathrm{k\Omega}, C=19.78\,\mathrm{\mu F}$).
-    2. **Handling Instabilities**: Series C is automatically clipped to the region *after* its initial magnetization peak to remove start-up noise.
-    3. **Outlier Removal**: A robust **Hampel filter** (7-point rolling median) identifies singular anomalies deviating by $>4.8\times$ the Median Absolute Deviation (MAD).
-    4. **Heating Rate Cutoff**: To prevent thermal lag errors at high temperatures, data is clipped if the heating rate $dT/dt$ drops below $20\%$ of the median run rate.
-    5. **Magnetization Proxies**: Three methods (Remanence, Saturation-edge, and Tail-extrapolation) are used to extract a per-loop order parameter $M(T)$.
-    6. **Rough $T_c$ Estimation**: The peak of the numerical second derivative $\frac{d^2M}{dT^2}$ provides a model-independent inflection point estimate.
-    7. **Refined Fits**: Curie temperature is extracted via a Mean-field fit ($M \propto \sqrt{T_c - T}$) and a Curie-Weiss fit ($1/\chi \propto T - T_c$) in strictly defined physical regimes.
+    1. Setup and data preparation (including units and uncertainties)
+    2. **Handling Instabilities**: Measurement C is automatically clipped to the region after its magnetization peak to remove initial stabilization instability.
+    3. **Outlier Removal**: Singular anomalies are detected via a robust Hampel filter.
+    4. **Heating Rate Cutoff**: High-temperature points where the heating rate stalls (e.g., thermal equilibrium loss) are removed to ensure Curie-Weiss linearity.
+    5. Part A: extraction of magnetization proxies (M1, M2, M3) from loop geometries.
+    5. **Rough Tc Estimation**: Numerical second-derivatives are used to find the transition inflection point.
+    6. **Arrott Plot Analysis**: Extraction of Tc using thermodynamic isotherms in the $M^2$ vs $H/M$ coordinate system.
+    6. Part B: Refined Curie temperature extraction using restricted temperature regimes.
 
     **Notation**
-    - $T$: Temperature in Kelvin.
-    - $H \propto X$: External field proxy (Volts).
-    - $B \propto Y$: Magnetic flux proxy (Volts).
-    - $M$: Magnetization proxy.
-
-    **Uncertainty Treatment**
-    Uncertainties are propagated using the partial derivative rule.
-    - **Temperature**: Combined thermometer accuracy $\pm(0.1\% \text{rdg} + 1\,\mathrm{K})$, $1\,\mathrm{mK}$ digitization, and finite-time drift ($|dT/dt| \Delta t / \sqrt{12}$).
-    - **Field**: Scope digitization uncertainty is modeled as a uniform distribution (quantization step / $\sqrt{12}$).
-
-    **Integrator Validity**
-    The circuit is a valid integrator when $\omega RC \gg 1$. At $50\,\mathrm{Hz}$ drive:
-    $$\tau = RC \approx 78\,\mathrm{ms} \gg T_{\text{drive}} = 20\,\mathrm{ms}$$
-    $$\omega\tau \approx 24.6$$
-    This corresponds to a gain error of $<0.1\%$ and a phase departure of $\approx 2.3^\circ$.
+    - \(T\): temperature in Kelvin
+    - \(H\): external field proxy (oscilloscope X channel, volts)
+    - \(B\): total field proxy (oscilloscope Y channel, volts)
+    - \(M\): magnetization proxy extracted from hysteresis geometry
     """)
     return
 
@@ -57,6 +47,7 @@ def _():
     import matplotlib.pyplot as plt
     import numpy as np
     import pandas as pd
+    from scipy.signal import savgol_filter
     from scipy.optimize import curve_fit
 
     plt.rcParams.update(
@@ -76,7 +67,7 @@ def _():
         "fit": "#e7298a",
         "data": "#1f77b4",
     }
-    return COLORS, Path, curve_fit, np, pd, plt
+    return COLORS, Path, curve_fit, np, pd, plt, savgol_filter
 
 
 @app.cell
@@ -130,27 +121,30 @@ def _(mo):
     mo.md(r"""
     ## Setup details and preprocessing
 
-    **Data Cleaning Pipeline**
+    **Data preparation done here**
+    - Loaded all three measurement series (`series A/B/C`) from `curie/data`.
+    - Converted temperature from Celsius to Kelvin using \(T_K = T_C + 273.15\).
+    - Kept the native oscilloscope channels as field proxies:
+      - X channel \(\propto H\)
+      - Y channel \(\propto B\)
+    - **Automated Cleaning Applied**:
+      - **Series C instability**: The measurement is clipped to the region *after* the initial magnetization peak to skip stabilization noise.
+      - **Outliers**: Singular anomalies are identified using a 7-point rolling median threshold (Hampel filter) and removed from the extraction.
+      - **Stagnation Filter**: Data is clipped when the heating rate $dT/dt$ drops below 20% of the median rate to avoid thermal lag errors at high temperatures.
+    - Built per-loop uncertainty arrays:
+      - \(\sigma_T\): thermometer spec + temperature-resolution + finite-time drift
+      - \(\sigma_X, \sigma_Y\): digitization uncertainty (uniform quantization model)
 
-    To ensure the robustness of the Curie temperature fits, the following automated filters are applied:
-
-    1. **Series C Leading-Edge Clip**: Series C shows significant instability during the initial current ramp-up. We detect the magnetization peak using a 5-point moving average and discard all points preceding it.
-    2. **Hampel Filter (Outlier Detection)**: We compute a 7-point rolling median of the magnetization. A point $M_i$ is flagged as an anomaly if:
-       $|M_i - \text{median}| > 4.8 \times \text{MAD}$
-       where MAD is the Median Absolute Deviation. This effectively removes singular digitization spikes or thermal noise without smoothing the underlying transition curve.
-    3. **Thermal Stagnation Filter**: As the heater reaches its limit, the heating rate $dT/dt$ stalls. This creates a non-equilibrium state between the sample and the probe. We calculate the median heating rate and discard any points at the end of the run where the rate drops below $20\%$ of this median.
-    4. **Background Subtraction**: To isolate the ferromagnetic signal, we fit a linear paramagnetic background ($\chi_{\text{bg}} \cdot H + b$) to the top $25\%$ (highest temperature) of the data. This background is subtracted from all magnetization proxies before normalization.
-
-    **Normalization**
-    All proxies are normalized to the range $[0, 1]$ using:
-    $$M_{\text{norm}} = \frac{M - M_{\text{min}}}{M_{\text{max}} - M_{\text{min}}}$$
-    This enables comparing different extraction methods on a common scale.
+    **Uncertainty scope**
+    - Random/statistical uncertainties are propagated through extraction and fits.
+    - Hardware calibration systematics (component tolerances) are not provided in the guide;
+      therefore they are not included in the numeric propagation below.
     """)
     return
 
 
 @app.cell
-def _(SIGMA_Y_V, curve_fit, np):
+def _(SIGMA_Y_V, curve_fit, np, savgol_filter):
     def sorted_channel_columns(df, prefix):
         cols = [c for c in df.columns if c.startswith(prefix)]
         return sorted(cols, key=lambda c: int(c[len(prefix):]))
@@ -317,7 +311,6 @@ def _(SIGMA_Y_V, curve_fit, np):
         if len(T) < 10:
             return np.nan
         # Smooth to avoid noise in derivatives
-        from scipy.signal import savgol_filter
         M_smooth = savgol_filter(M, window_length=9, polyorder=3)
         # Find where the curve drops fastest (inflection point)
         d2M = np.gradient(np.gradient(M_smooth, T), T)
@@ -711,24 +704,12 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Part A — Magnetization extraction methods
+    ## Part A — Magnetization curves from three extraction methods
 
-    To cancel common-mode DC offsets on the Y-channel, all magnetization proxies are calculated as the **half-difference** of the upper ($M_+$) and lower ($M_-$) branches of a single hysteresis loop:
-    $$M = \frac{1}{2}|M_+ - M_-|$$
-
-    We compare three methods of extraction:
-
-    1.  **Method 1 (Remanence at $H=0$)**:
-        Reads the loop opening at exactly zero field. We use a local linear interpolation between the two points bracketing $H=0$.
-
-    2.  **Method 2 (Saturation Edges)**:
-        Reads the magnetization at the loop's extreme field tips ($H \approx \pm H_{\text{max}}$). We average the outermost $12\%$ of the samples to improve Signal-to-Noise Ratio (SNR).
-
-    3.  **Method 3 (Adaptive Tail Extrapolation)**:
-        Fits a straight line to the saturated "tails" of the loop. To find the linear regime automatically, we start from the tip and grow the window inward as long as the fit residuals stay below $2.2\sigma$. The magnetization $M_0^{\text{ext}}$ is then defined as the $H=0$ intercept of this tail fit.
-
-    **Rough $T_c$ Estimate**
-    Before performing non-linear fits, we calculate a "Rough $T_c$" by finding the peak of the numerical second derivative of Method 3. This identifies the inflection point where the system's curvature changes most rapidly as it enters the paramagnetic tail.
+    For each measurement series (A, B, C), one graph is shown with all three normalized \(M(T)\) curves:
+    1. **Method 1**: loop intersection at \(H=0\)
+    2. **Method 2**: saturation-edge values
+    3. **Method 3**: adaptive linear fit to saturation tails and extrapolation to \(H=0\)
     """)
     return
 
@@ -792,15 +773,16 @@ def _(mo):
     mo.md(r"""
     ## Part B — Curie temperature extraction
 
-    We apply two models to the magnetization proxy (Method 3) to determine the Curie temperature $T_c$:
-
-    1.  **Far-field (Mean-field) Fit**:
-        Valid near the transition from below ($T < T_c$). We fit the power law $M(T) = A\sqrt{T_c - T}$. To avoid saturation at low temperatures and the finite-field "smearing" above the transition, the fit is restricted to the regime $M < 0.9$ and $T < T_{c,\text{rough}} - 1.5\,\mathrm{K}$.
-
-    2.  **Curie-Weiss Fit**:
-        Valid in the paramagnetic regime ($T > T_c$). We fit the inverse susceptibility $1/\chi(T) = (T - T_c)/C$. To ensure we are far from critical fluctuations near $T_c$, we only use points where $T > 1.25 \times T_{c,\text{rough}}$.
+    Two fitting methods are applied to each series:
+    1. **Far-field (mean-field near transition):** \(M(T)=A\sqrt{T_C-T}\)
+    2. **Curie–Weiss:** \(1/\chi(T)=(T-T_C)/C\)
 
     The requested third option (second-derivative divergence) is skipped here because the finite-point numerical second derivative is too unstable for these datasets and gives non-robust \(T_C\) estimates.
+
+    **Regime Selection (Data Cutting)**
+    The physical models are only valid in specific temperature regimes. To ensure robust fits, points outside these regimes are automatically masked:
+    - **Far-field**: Only uses points where \(0.05 < M < 0.9\) to avoid saturation at low-T and finite-field smearing near \(T_c\).
+    - **Curie–Weiss**: Only uses points far away from the transition (\(T > 1.25 \times T_{c,\text{rough}}\)) to ensure the system is purely in the paramagnetic state.
 
     The plots below show the full slider-filtered range in light gray for context.
     """)
@@ -1107,6 +1089,166 @@ def _(
 
 
 @app.cell
+def _(mo):
+    mo.md(r"""
+    ## Part C — Arrott Plot Analysis
+
+    An **Arrott plot** is a visualization of isotherms in the coordinate system of $M^2$ versus $H/M$. According to the Ginzburg-Landau mean-field theory, near the transition temperature $T_c$, these isotherms should be approximately parallel straight lines. The isotherm that passes through the origin corresponds to $T = T_c$.
+
+    By extrapolating the linear high-field portion of each isotherm to the $M^2$ axis (the $H/M \to 0$ intercept), we obtain the squared spontaneous magnetization $M_s^2(T)$. We then fit $M_s^2$ versus $T$ to find the temperature where spontaneous magnetization vanishes ($M_s^2 = 0$), which provides our estimate for $T_c$.
+    """)
+    return
+
+
+@app.cell
+def _(
+    COLORS,
+    SERIES_ORDER,
+    curve_fit,
+    filtered_series_data,
+    np,
+    pd,
+    plt,
+    savgol_filter,
+    sliders,
+):
+    def _run_arrott():
+        _arrott_results = {}
+        _arrott_rows = []
+        for _name in SERIES_ORDER:
+            _d = filtered_series_data[_name]
+            _Ts, _Xp, _Yp, _Yn = _d["T_K"], _d["X_pos"], _d["Y_pos"], _d["Y_neg"]
+            _ms_sq, _ms_sq_sigma, _valid_Ts = [], [], []
+            _isotherms = []
+
+            # Characteristic indices for the Arrott plot isotherms
+            _plot_idx = np.linspace(0, len(_Ts) - 1, 7, dtype=int)
+
+            for _i in range(len(_Ts)):
+                _n_tail = int(_d["tail_points"][_i])
+                if _n_tail < 5:
+                    continue
+                # Extract H and M proxies: M is half-difference of branches
+                _h_all = _Xp[_i]
+                _m_all = 0.5 * (_Yp[_i] - _Yn[_i][::-1])
+                _idx = np.argsort(_h_all)[-_n_tail:]
+                _h, _m = _h_all[_idx], _m_all[_idx]
+                _mask = _m > 0
+                if np.sum(_mask) < 4:
+                    continue
+                _arr_y, _arr_x = _m[_mask] ** 2, _h[_mask] / _m[_mask]
+                try:
+                    _p, _cov = np.polyfit(_arr_x, _arr_y, 1, cov=True)
+                    _ms_sq.append(_p[1])
+                    _ms_sq_sigma.append(np.sqrt(_cov[1, 1]))
+                    _valid_Ts.append(_Ts[_i])
+
+                    if _i in _plot_idx:
+                        _isotherms.append({
+                            "T": _Ts[_i],
+                            "x": _arr_x,
+                            "y": _arr_y,
+                            "fit_y": _p[0] * _arr_x + _p[1]
+                        })
+                except Exception:
+                    continue
+            _T_arr, _M2_arr, _sM2_arr = np.array(_valid_Ts), np.array(_ms_sq), np.array(_ms_sq_sigma)
+
+            # Identify the linearly sloped middle section by analyzing the gradient
+            if len(_T_arr) > 12:
+                # Sort to ensure gradient is meaningful
+                _srt = np.argsort(_T_arr)
+                _T_s, _M2_s, _sM2_s = _T_arr[_srt], _M2_arr[_srt], _sM2_arr[_srt]
+                # Smooth intercepts to find the stable descent plateau
+                _m2_smooth = savgol_filter(_M2_s, window_length=9, polyorder=2)
+                _grad = np.gradient(_m2_smooth, _T_s)
+
+                # Find region of significant descent (avoiding the saturated low-T and noisy high-T tail)
+                _min_grad = np.min(_grad)
+                _fit_mask = (_grad < 0.6 * _min_grad) & (_M2_s > 0.15 * np.max(_M2_s))
+                _T_arr, _M2_arr, _sM2_arr = _T_s, _M2_s, _sM2_s
+            else:
+                _fit_mask = (_M2_arr > 0.1 * np.max(_M2_arr)) & (_M2_arr < 0.9 * np.max(_M2_arr))
+
+            if np.sum(_fit_mask) > 5:
+                _Tf, _yf, _syf = _T_arr[_fit_mask], _M2_arr[_fit_mask], _sM2_arr[_fit_mask]
+                try:
+                    _p_out, _c_out = curve_fit(lambda t, s, tc: s * (tc - t), _Tf, _yf, p0=[1e-3, 215.0], sigma=_syf)
+                    _tc, _stc = _p_out[1], np.sqrt(_c_out[1, 1])
+                    _arrott_rows.append({"Series": _name, "Tc [K]": _tc, "sigma Tc [K]": _stc})
+                    _arrott_results[_name] = {
+                        "ok": True, "Tc": _tc, "T": _T_arr, "M2": _M2_arr,
+                        "Tf": _Tf, "yf": _yf, "yp": _p_out[0] * (_p_out[1] - _Tf),
+                        "isotherms": _isotherms
+                    }
+                except Exception:
+                    _arrott_results[_name] = {"ok": False, "isotherms": _isotherms}
+            else:
+                _arrott_results[_name] = {"ok": False, "isotherms": _isotherms}
+        return _arrott_results, pd.DataFrame(_arrott_rows)
+
+    arrott_results, arrott_summary_df = _run_arrott()
+
+    # 1. Plot the actual Arrott isotherms: M^2 vs H/M
+    fig_iso, axs_iso = plt.subplots(1, 3, figsize=(13, 4))
+    for _i, _name in enumerate(SERIES_ORDER):
+        _ax = axs_iso[_i]
+        _res = arrott_results[_name]
+        if "isotherms" in _res:
+            _cmap = plt.get_cmap("plasma")
+            _T_min_run, _T_max_run = sliders.value[_name]
+            for _iso in _res["isotherms"]:
+                _c = _cmap((_iso["T"] - _T_min_run) / max(_T_max_run - _T_min_run, 1e-3))
+                _ax.plot(_iso["x"], _iso["y"], "o", ms=3, color=_c, alpha=0.5)
+                _ax.plot(_iso["x"], _iso["fit_y"], "-", lw=1, color=_c, label=f"{_iso['T']:.1f} K")
+        _ax.set_title(f"{_name} | Arrott Plot ($M^2$ vs $H/M$)")
+        _ax.set_xlabel("$H/M$ (relative)")
+        _ax.set_ylabel("$M^2$ (relative)")
+        _ax.legend(loc="best", fontsize=7)
+    fig_iso.tight_layout()
+
+    # 2. Plot the Spontaneous Magnetization Intercepts: Ms^2 vs T
+    fig_ms, axs_ms = plt.subplots(1, 3, figsize=(13, 4))
+    for _i, _name in enumerate(SERIES_ORDER):
+        _ax = axs_ms[_i]
+
+        # Sync X-axis with sliders
+        _ax.set_xlim(sliders.value[_name])
+
+        _res = arrott_results[_name]
+        if "T" in _res:
+            _ax.errorbar(_res["T"], _res["M2"], fmt="o", ms=3, color="lightgray", alpha=0.5)
+        if _res.get("ok"):
+            _ax.plot(_res["Tf"], _res["yf"], "o", ms=4, color=COLORS["data"], label="fit data")
+            _ax.plot(_res["Tf"], _res["yp"], "-", color=COLORS["fit"], label=f"Tc={_res['Tc']:.2f} K")
+        _ax.axhline(0, color="k", lw=0.8)
+        _ax.set_title(f"{_name} | Spontaneous Magnetization $M_s^2$")
+        _ax.set_xlabel("Temperature [K]")
+        _ax.set_ylabel("$M_s^2$ (intercept)")
+        _ax.legend(loc="best", fontsize=8)
+    fig_ms.tight_layout()
+    return arrott_summary_df, fig_iso, fig_ms
+
+
+@app.cell
+def _(arrott_summary_df, fig_iso, fig_ms, mo):
+    mo.md(f"""
+    ### Arrott Plot Results
+
+    The Arrott plots below show isotherms in the $M^2$ vs $H/M$ plane. The intercept with the vertical axis ($M^2$) at $H/M=0$ gives the spontaneous magnetization $M_s^2$.
+
+    {mo.as_html(fig_iso)}
+
+    Extracted spontaneous magnetization intercepts $M_s^2(T)$ are shown below. The zero-crossing identifies the transition temperature $T_c$.
+
+    {mo.as_html(fig_ms)}
+
+    {arrott_summary_df.to_markdown(index=False, floatfmt=".3f")}
+    """)
+    return
+
+
+@app.cell
 def _(comparison_df, mo):
     row_ff = comparison_df.loc[comparison_df["Method"] == "Far-field"].iloc[0]
     row_cw = comparison_df.loc[comparison_df["Method"] == "Curie-Weiss"].iloc[0]
@@ -1121,13 +1263,12 @@ def _(comparison_df, mo):
     )
     best = "Far-field" if ff_good else "Curie-Weiss"
     best_row = row_ff if ff_good else row_cw
-    _Tc_rel_error = best_row["Weighted sigma [K]"] / best_row["Weighted Tc [K]"]
 
     mo.md(f"""
     ## Bottom line
 
     - Preferred method for final report: **{best}**
-    - Recommended Curie temperature estimate: **Tc = {best_row["Weighted Tc [K]"]:.2f} ± {best_row["Weighted sigma [K]"]:.2f} ({_Tc_rel_error:.2g}%) K**
+    - Recommended Curie temperature estimate: **Tc = {best_row["Weighted Tc [K]"]:.2f} ± {best_row["Weighted sigma [K]"]:.2f} K**
 
     This selection is based on the better residual behavior (lower median reduced chi-squared) and consistency across the three series.
     """)
