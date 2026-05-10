@@ -21,10 +21,12 @@ def _(mo):
 
     This notebook rebuilds the Curie analysis from scratch with a clean, reproducible pipeline.
 
-    **What is done**
+    **Data Cleaning & Processing**
     1. Setup and data preparation (including units and uncertainties)
-    2. Part A: three magnetization-extraction methods for each measurement series
-    3. Part B: Curie temperature extraction with two fitting methods (third method intentionally skipped)
+    2. **Handling Instabilities**: Measurement C is automatically clipped to the region after its magnetization peak to remove initial stabilization instability.
+    3. **Outlier Removal**: Singular anomalies are detected via a robust rolling median-deviation filter and removed from all series.
+    4. Part A: extraction of magnetization proxies (M1, M2, M3) from loop geometries.
+    5. Part B: Curie temperature extraction using Far-field and Curie-Weiss fits.
 
     **Notation**
     - \(T\): temperature in Kelvin
@@ -121,6 +123,9 @@ def _(mo):
     - Kept the native oscilloscope channels as field proxies:
       - X channel \(\propto H\)
       - Y channel \(\propto B\)
+    - **Automated Cleaning Applied**:
+      - **Series C instability**: The measurement is clipped to the region *after* the initial magnetization peak to skip stabilization noise.
+      - **Outliers**: Singular anomalies are identified using a 7-point rolling median threshold (Hampel filter) and removed from the extraction.
     - Built per-loop uncertainty arrays:
       - \(\sigma_T\): thermometer spec + temperature-resolution + finite-time drift
       - \(\sigma_X, \sigma_Y\): digitization uncertainty (uniform quantization model)
@@ -449,6 +454,41 @@ def _(
 
             chi0[i], schi0[i] = extract_chi_near_zero(X_pos[i], Y_pos[i], X_neg[i], Y_neg[i])
 
+        # --- DATA CLEANING (Automated Cutoffs & Outliers) ---
+        # 1. Automated Cutoff: Series C is unstable before reaching its magnetic peak.
+        # A and B receive a minor initial cutoff (first 4 points) to skip start-up transient.
+        if _series_name == "series C":
+            # Detect the peak on a smoothed version of M3 (the cleanest proxy)
+            m3_filled = np.nan_to_num(m3, nan=np.nanmedian(m3))
+            m3_smooth = np.convolve(m3_filled, np.ones(5)/5, mode='same')
+            start_idx = int(np.argmax(m3_smooth))
+        else:
+            start_idx = min(4, n_loops)
+
+        # 2. Outlier Detection: Identify singular spikes using a rolling median
+        # Basically, take a rolling windows of 7 points, compute the median, and flag points that deviate
+        # from that median by more than ~4.5 times the median absolute deviation as outliers.
+        m3_ser = pd.Series(m3)
+        m3_med = m3_ser.rolling(window=7, center=True).median().ffill().bfill().to_numpy()
+        m3_resid = np.abs(m3 - m3_med)
+        m3_mad = np.nanmedian(m3_resid)
+        # Threshold for 'singular points that are anomalies' (approx 4.5 sigma equivalent)
+        is_outlier = m3_resid > (4.8 * max(m3_mad, 1e-6))
+
+        # Apply Cleaning Mask to all local variables before saving to dictionary
+        valid_points = (np.arange(n_loops) >= start_idx) & (~is_outlier)
+
+        T_C, T_K = T_C[valid_points], T_K[valid_points]
+        time_s, sigma_T = time_s[valid_points], sigma_T[valid_points]
+        X_pos, Y_pos = X_pos[valid_points], Y_pos[valid_points]
+        X_neg, Y_neg = X_neg[valid_points], Y_neg[valid_points]
+        m1, s1 = m1[valid_points], s1[valid_points]
+        m2, s2 = m2[valid_points], s2[valid_points]
+        m3, s3 = m3[valid_points], s3[valid_points]
+        chi0, schi0 = chi0[valid_points], schi0[valid_points]
+        tail_points = tail_points[valid_points]
+
+        # Normalize the cleaned data
         m1_norm, s1_norm = normalize_with_uncertainty(m1, s1)
         m2_norm, s2_norm = normalize_with_uncertainty(m2, s2)
         m3_norm, s3_norm = normalize_with_uncertainty(m3, s3)
@@ -512,10 +552,60 @@ def _(
 
 
 @app.cell
-def _(SERIES_ORDER, mo, np, part_a_summary_df, pd, series_data):
+def _(SERIES_ORDER, mo, np, series_data):
+    """Create temperature range sliders for filtering each series"""
+    # Use mo.ui.dictionary to create a reactive group of sliders.
+    # This allows marimo to notify downstream cells whenever any slider changes.
+    sliders = mo.ui.dictionary({
+        name: mo.ui.range_slider(
+            value=(float(np.min(series_data[name]["T_K"])), float(np.max(series_data[name]["T_K"]))),
+            start=float(np.min(series_data[name]["T_K"])),
+            stop=float(np.max(series_data[name]["T_K"])),
+            step=0.5,
+            label=f"{name}: [K]"
+        )
+        for name in SERIES_ORDER
+    })
+
+    # Construct a display layout. Returning this object as the cell's result
+    # ensures it is rendered as interactive HTML in the notebook.
+    slider_display = mo.vstack([
+        mo.vstack([mo.md(f"**{name}**"), sliders[name]]) for name in SERIES_ORDER
+    ])
+    slider_display  # type: ignore
+    return (sliders,)
+
+
+@app.cell
+def _(SERIES_ORDER, np, series_data, sliders):
+    """Apply temperature range filters to the data"""
+    filtered_series_data = {}
+
+    for series_name in SERIES_ORDER:
+        original_data = series_data[series_name]
+        # Access the current values through the sliders.value property.
+        # Accessing .value is what establishes the reactive dependency.
+        T_min, T_max = sliders.value[series_name]
+
+        # Create mask for temperature range
+        mask = (original_data["T_K"] >= T_min) & (original_data["T_K"] <= T_max)
+
+        # Apply mask to all arrays in the data dict
+        filtered_series_data[series_name] = {}
+        for key, val in original_data.items():
+            if isinstance(val, np.ndarray):
+                filtered_series_data[series_name][key] = val[mask]
+            else:
+                # Keep non-array values as-is
+                filtered_series_data[series_name][key] = val
+    return (filtered_series_data,)
+
+
+@app.cell
+def _(SERIES_ORDER, filtered_series_data, mo, np, part_a_summary_df, pd):
     prep_rows = []
     for name in SERIES_ORDER:
-        _d = series_data[name]
+        _d = filtered_series_data[name]
         prep_rows.append(
             {
                 "Series": name,
@@ -554,11 +644,11 @@ def _(mo):
 
 
 @app.cell
-def _(COLORS, SERIES_ORDER, plt, series_data):
+def _(COLORS, SERIES_ORDER, filtered_series_data, plt):
     def _():
         fig, axs = plt.subplots(nrows=3, ncols=1, figsize=(8, 12))
         for _i, _series_name in enumerate(SERIES_ORDER):
-            _d = series_data[_series_name]
+            _d = filtered_series_data[_series_name]
             _T = _d["T_K"]
             ax = axs[_i]
             ax.errorbar(
@@ -624,12 +714,12 @@ def _(mo):
 
 
 @app.cell
-def _(SERIES_ORDER, fit_curie_weiss, fit_far_field, pd, series_data):
+def _(SERIES_ORDER, filtered_series_data, fit_curie_weiss, fit_far_field, pd):
     fit_results = {"far_field": {}, "curie_weiss": {}}
     fit_rows = []
 
     for _series_name in SERIES_ORDER:
-        _d = series_data[_series_name]
+        _d = filtered_series_data[_series_name]
         _T = _d["T_K"]
         M = _d["method3_norm"]
         sM = _d["method3_sigma_norm"]
