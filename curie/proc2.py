@@ -142,7 +142,7 @@ def _(mo):
 def _(SIGMA_Y_V, curve_fit, np):
     def sorted_channel_columns(df, prefix):
         cols = [c for c in df.columns if c.startswith(prefix)]
-        return sorted(cols, key=lambda c: int(c[len(prefix) :]))
+        return sorted(cols, key=lambda c: int(c[len(prefix):]))
 
     def _y_at_zero(x, y, sigma_y):
         x = np.asarray(x, dtype=float)
@@ -295,11 +295,19 @@ def _(SIGMA_Y_V, curve_fit, np):
         sa = float(np.sqrt(pcov[0, 0]))
         return a, sa
 
+    def _transition_temp(Tvals, Mvals):
+        if len(Tvals) == 0:
+            return np.nan
+        idx = int(np.nanargmin(np.abs(Mvals - 0.5)))
+        return float(Tvals[idx])
+
     def fit_far_field(T_K, M_norm, sigma_M, Tc_seed=215.0):
         _T = np.asarray(T_K, dtype=float)
         M = np.asarray(M_norm, dtype=float)
         sM = np.asarray(sigma_M, dtype=float)
 
+        # Masking for physical validity: mean-field law is valid near transition
+        # but fails at low-T saturation or near the finite-field 'tail' at Tc.
         mask = np.isfinite(_T) & np.isfinite(M) & np.isfinite(sM) & (M > 0.05) & (M < 0.9)
         if np.sum(mask) < 8:
             mask = np.isfinite(_T) & np.isfinite(M) & np.isfinite(sM) & (M > 0.02)
@@ -405,6 +413,7 @@ def _(SIGMA_Y_V, curve_fit, np):
         fit_curie_weiss,
         fit_far_field,
         sorted_channel_columns,
+        _transition_temp,
     )
 
 
@@ -421,7 +430,6 @@ def _(
     temperature_uncertainty_k,
 ):
     series_data = {}
-    part_a_rows = []
 
     for _series_name in SERIES_ORDER:
         data_file = SERIES_FILES[_series_name]
@@ -530,35 +538,7 @@ def _(
             "tail_points": tail_points,
         }
 
-        def _transition_temp(Tvals, Mvals):
-            idx = int(np.nanargmin(np.abs(Mvals - 0.5)))
-            return float(Tvals[idx])
-
-        part_a_rows.extend(
-            [
-                {
-                    "Series": _series_name,
-                    "Method": "M1 @ H=0",
-                    "T(M=0.5) [K]": _transition_temp(T_K, m1_norm),
-                    "Range(raw)": float(np.nanmax(m1) - np.nanmin(m1)),
-                },
-                {
-                    "Series": _series_name,
-                    "Method": "M2 saturation edges",
-                    "T(M=0.5) [K]": _transition_temp(T_K, m2_norm),
-                    "Range(raw)": float(np.nanmax(m2) - np.nanmin(m2)),
-                },
-                {
-                    "Series": _series_name,
-                    "Method": "M3 tail extrapolation",
-                    "T(M=0.5) [K]": _transition_temp(T_K, m3_norm),
-                    "Range(raw)": float(np.nanmax(m3) - np.nanmin(m3)),
-                },
-            ]
-        )
-
-    part_a_summary_df = pd.DataFrame(part_a_rows)
-    return part_a_summary_df, series_data
+    return series_data
 
 
 @app.cell
@@ -617,20 +597,49 @@ def _(SERIES_ORDER, np, series_data, sliders):
 
 
 @app.cell
-def _(SERIES_ORDER, filtered_series_data, mo, np, part_a_summary_df, pd):
+def _(SERIES_ORDER, filtered_series_data, mo, np, pd, _transition_temp):
     prep_rows = []
+    part_a_rows = []
+
     for name in SERIES_ORDER:
         _d = filtered_series_data[name]
+        _T = _d["T_K"]
+
         prep_rows.append(
             {
                 "Series": name,
-                "Loops": len(_d["T_K"]),
-                "T range [K]": f"{np.min(_d['T_K']):.1f} to {np.max(_d['T_K']):.1f}",
+                "Loops": len(_T),
+                "T range [K]": f"{np.min(_T):.1f} to {np.max(_T):.1f}" if len(_T) > 0 else "N/A",
                 "median σT [K]": f"{np.median(_d['sigma_T_K']):.2f}",
                 "tail points (M3)": int(np.nanmedian(_d["tail_points"])),
             }
         )
+
+        # Calculate summary row reactively based on slider range
+        part_a_rows.extend([
+            {
+                "Series": name,
+                "Method": "M1 @ H=0",
+                "T(M=0.5) [K]": _transition_temp(_T, _d["method1_norm"]),
+                "Range(raw)": float(np.nanmax(_d["method1"]) - np.nanmin(_d["method1"])) if len(_T) > 0 else 0,
+            },
+            {
+                "Series": name,
+                "Method": "M2 saturation edges",
+                "T(M=0.5) [K]": _transition_temp(_T, _d["method2_norm"]),
+                "Range(raw)": float(np.nanmax(_d["method2"]) - np.nanmin(_d["method2"])) if len(_T) > 0 else 0,
+            },
+            {
+                "Series": name,
+                "Method": "M3 tail extrapolation",
+                "T(M=0.5) [K]": _transition_temp(_T, _d["method3_norm"]),
+                "Range(raw)": float(np.nanmax(_d["method3"]) - np.nanmin(_d["method3"])) if len(_T) > 0 else 0,
+            }
+        ])
+
     prep_df = pd.DataFrame(prep_rows)
+    part_a_summary_df = pd.DataFrame(part_a_rows)
+
     mo.md(f"""
     **Setup summary**
 
@@ -640,7 +649,7 @@ def _(SERIES_ORDER, filtered_series_data, mo, np, part_a_summary_df, pd):
 
     {part_a_summary_df.to_markdown(index=False, floatfmt=".3f")}
     """)
-    return
+    return part_a_summary_df, prep_df
 
 
 @app.cell(hide_code=True)
@@ -721,7 +730,12 @@ def _(mo):
 
     The requested third option (second-derivative divergence) is skipped here because the finite-point numerical second derivative is too unstable for these datasets and gives non-robust \(T_C\) estimates.
 
-    For Part B, Method 3 from Part A is used as the magnetization input, because it is least sensitive to finite-field offset and loop asymmetry.
+    **Regime Selection (Data Cutting)**
+    The physical models are only valid in specific temperature regimes. To ensure robust fits, points outside these regimes are automatically masked:
+    - **Far-field**: Only uses points where \(0.05 < M < 0.9\) to avoid saturation at low-T and finite-field smearing near \(T_c\).
+    - **Curie–Weiss**: Only uses points in the paramagnetic regime (above \(T_c + \text{buffer}\)).
+
+    The plots below show the full slider-filtered range in light gray for context.
     """)
     return
 
@@ -859,7 +873,7 @@ def _(comparison_df, fit_table_df, mo):
 
 
 @app.cell
-def _(COLORS, SERIES_ORDER, fit_results, np, plt):
+def _(COLORS, SERIES_ORDER, fit_results, filtered_series_data, sliders, np, plt):
     def _():
         fig, axs = plt.subplots(
             2, 3, figsize=(13.0, 6.2), sharex="col", gridspec_kw={"height_ratios": [3, 1]}
@@ -868,7 +882,14 @@ def _(COLORS, SERIES_ORDER, fit_results, np, plt):
             res = fit_results["far_field"][_series_name]
             ax_top = axs[0, j]
             ax_bot = axs[1, j]
+
+            # Sync X-axis with sliders
+            ax_top.set_xlim(sliders.value[_series_name])
+
             if res["ok"]:
+                _d = filtered_series_data[_series_name]
+                ax_top.plot(_d["T_K"], _d["method3_norm"], "o", ms=2, color="lightgray", alpha=0.4, label="excluded from fit")
+
                 Tf = res["T_fit"]
                 yf = res["y_fit"]
                 sf = res["sigma_fit"]
@@ -918,7 +939,7 @@ def _(COLORS, SERIES_ORDER, fit_results, np, plt):
 
 
 @app.cell
-def _(COLORS, SERIES_ORDER, fit_results, np, plt):
+def _(COLORS, SERIES_ORDER, fit_results, filtered_series_data, sliders, np, plt):
     def _():
         fig, axs = plt.subplots(
             2, 3, figsize=(13.0, 6.2), sharex="col", gridspec_kw={"height_ratios": [3, 1]}
@@ -927,7 +948,15 @@ def _(COLORS, SERIES_ORDER, fit_results, np, plt):
             res = fit_results["curie_weiss"][_series_name]
             ax_top = axs[0, j]
             ax_bot = axs[1, j]
+
+            # Sync X-axis with sliders
+            ax_top.set_xlim(sliders.value[_series_name])
+
             if res["ok"]:
+                _d = filtered_series_data[_series_name]
+                _inv_chi_full = 1.0 / np.maximum(_d["chi0"], 1e-12)
+                ax_top.plot(_d["T_K"], _inv_chi_full, "o", ms=2, color="lightgray", alpha=0.4, label="excluded from fit")
+
                 Tf = res["T_fit"]
                 yf = res["y_fit"]
                 sf = res["sigma_fit"]
