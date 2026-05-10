@@ -24,9 +24,11 @@ def _(mo):
     **Data Cleaning & Processing**
     1. Setup and data preparation (including units and uncertainties)
     2. **Handling Instabilities**: Measurement C is automatically clipped to the region after its magnetization peak to remove initial stabilization instability.
-    3. **Outlier Removal**: Singular anomalies are detected via a robust rolling median-deviation filter and removed from all series.
-    4. Part A: extraction of magnetization proxies (M1, M2, M3) from loop geometries.
-    5. Part B: Curie temperature extraction using Far-field and Curie-Weiss fits.
+    3. **Outlier Removal**: Singular anomalies are detected via a robust Hampel filter.
+    4. **Heating Rate Cutoff**: High-temperature points where the heating rate stalls (e.g., thermal equilibrium loss) are removed to ensure Curie-Weiss linearity.
+    5. Part A: extraction of magnetization proxies (M1, M2, M3) from loop geometries.
+    5. **Rough Tc Estimation**: Numerical second-derivatives are used to find the transition inflection point.
+    6. Part B: Refined Curie temperature extraction using restricted temperature regimes.
 
     **Notation**
     - \(T\): temperature in Kelvin
@@ -126,6 +128,7 @@ def _(mo):
     - **Automated Cleaning Applied**:
       - **Series C instability**: The measurement is clipped to the region *after* the initial magnetization peak to skip stabilization noise.
       - **Outliers**: Singular anomalies are identified using a 7-point rolling median threshold (Hampel filter) and removed from the extraction.
+      - **Stagnation Filter**: Data is clipped when the heating rate $dT/dt$ drops below 20% of the median rate to avoid thermal lag errors at high temperatures.
     - Built per-loop uncertainty arrays:
       - \(\sigma_T\): thermometer spec + temperature-resolution + finite-time drift
       - \(\sigma_X, \sigma_Y\): digitization uncertainty (uniform quantization model)
@@ -295,20 +298,40 @@ def _(SIGMA_Y_V, curve_fit, np):
         sa = float(np.sqrt(pcov[0, 0]))
         return a, sa
 
-    def _transition_temp(Tvals, Mvals):
+    def transition_temp(Tvals, Mvals):
         if len(Tvals) == 0:
             return np.nan
         idx = int(np.nanargmin(np.abs(Mvals - 0.5)))
         return float(Tvals[idx])
 
-    def fit_far_field(T_K, M_norm, sigma_M, Tc_seed=215.0):
+    def estimate_rough_tc(T, M):
+        """Estimate Tc using the peak of the second derivative of M(T)."""
+        if len(T) < 10:
+            return np.nan
+        # Smooth to avoid noise in derivatives
+        from scipy.signal import savgol_filter
+        M_smooth = savgol_filter(M, window_length=9, polyorder=3)
+        # Find where the curve drops fastest (inflection point)
+        d2M = np.gradient(np.gradient(M_smooth, T), T)
+        # The peak of the second derivative happens as it curves into the tail
+        idx = np.argmax(np.abs(d2M))
+        return float(T[idx])
+
+    def fit_far_field(T_K, M_norm, sigma_M, Tc_seed=215.0, T_rough=None):
         _T = np.asarray(T_K, dtype=float)
         M = np.asarray(M_norm, dtype=float)
         sM = np.asarray(sigma_M, dtype=float)
 
-        # Masking for physical validity: mean-field law is valid near transition
-        # but fails at low-T saturation or near the finite-field 'tail' at Tc.
-        mask = np.isfinite(_T) & np.isfinite(M) & np.isfinite(sM) & (M > 0.05) & (M < 0.9)
+        # Physical Bounds:
+        # 1. M < 0.9: Exclude low-T saturation where MF law fails.
+        # 2. T < T_rough - safety: Exclude the finite-field 'tail' above transition.
+        mask = np.isfinite(_T) & np.isfinite(M) & np.isfinite(sM) & (M < 0.9)
+
+        if T_rough is not None:
+            mask &= (_T < T_rough - 1.5)
+        else:
+            mask &= (M > 0.05)
+
         if np.sum(mask) < 8:
             mask = np.isfinite(_T) & np.isfinite(M) & np.isfinite(sM) & (M > 0.02)
         if np.sum(mask) < 6:
@@ -352,7 +375,7 @@ def _(SIGMA_Y_V, curve_fit, np):
             "n": int(len(Tf)),
         }
 
-    def fit_curie_weiss(T_K, chi, sigma_chi, Tc_seed=215.0):
+    def fit_curie_weiss(T_K, chi, sigma_chi, Tc_seed=215.0, T_rough=None):
         _T = np.asarray(T_K, dtype=float)
         chi = np.asarray(chi, dtype=float)
         schi = np.asarray(sigma_chi, dtype=float)
@@ -362,8 +385,10 @@ def _(SIGMA_Y_V, curve_fit, np):
 
         inv_chi = 1.0 / chi
         sigma_inv = schi / np.maximum(chi, 1e-12) ** 2
-        top_start = np.quantile(_T[mask], 0.65)
-        cut = max(float(Tc_seed + 2.0), float(top_start))
+
+        # CW is only valid in paramagnetic regime (far away from transition)
+        cut = 1.25 * (T_rough if T_rough is not None else Tc_seed)
+
         fit_mask = mask & (_T >= cut)
         if np.sum(fit_mask) < 6:
             fit_mask = mask & (_T >= np.quantile(_T[mask], 0.60))
@@ -408,12 +433,13 @@ def _(SIGMA_Y_V, curve_fit, np):
         }
 
     return (
+        estimate_rough_tc,
         extract_chi_near_zero,
         extract_loop_methods,
         fit_curie_weiss,
         fit_far_field,
         sorted_channel_columns,
-        _transition_temp,
+        transition_temp,
     )
 
 
@@ -493,8 +519,18 @@ def _(
         # Threshold for 'singular points that are anomalies' (approx 4.5 sigma equivalent)
         is_outlier = m3_resid > (4.8 * max(m3_mad, 1e-6))
 
+        # 3. Heating Rate Cutoff: Remove "wonky" points at the end where heating stalls
+        dT_dt = np.gradient(T_K, time_s)
+        median_rate = np.median(dT_dt)
+        # Find where heating rate drops significantly (usually at the end of the run)
+        is_stalled = dT_dt < (0.2 * median_rate)
+        # Only apply stall cut to the latter half of the data to avoid start-up transients
+        # being caught here (start_idx already handles start-up)
+        stall_indices = np.where(is_stalled & (np.arange(n_loops) > n_loops / 2))[0]
+        end_idx = stall_indices[0] if len(stall_indices) > 0 else n_loops
+
         # Apply Cleaning Mask to all local variables before saving to dictionary
-        valid_points = (np.arange(n_loops) >= start_idx) & (~is_outlier)
+        valid_points = (np.arange(n_loops) >= start_idx) & (np.arange(n_loops) < end_idx) & (~is_outlier)
 
         T_C, T_K = T_C[valid_points], T_K[valid_points]
         time_s, sigma_T = time_s[valid_points], sigma_T[valid_points]
@@ -537,8 +573,7 @@ def _(
             "chi0_sigma": schi0,
             "tail_points": tail_points,
         }
-
-    return series_data
+    return (series_data,)
 
 
 @app.cell
@@ -597,7 +632,15 @@ def _(SERIES_ORDER, np, series_data, sliders):
 
 
 @app.cell
-def _(SERIES_ORDER, filtered_series_data, mo, np, pd, _transition_temp):
+def _(
+    SERIES_ORDER,
+    estimate_rough_tc,
+    filtered_series_data,
+    mo,
+    np,
+    pd,
+    transition_temp,
+):
     prep_rows = []
     part_a_rows = []
 
@@ -605,13 +648,18 @@ def _(SERIES_ORDER, filtered_series_data, mo, np, pd, _transition_temp):
         _d = filtered_series_data[name]
         _T = _d["T_K"]
 
+        # Calculate rough Tc for this series based on derivative of M3
+        t_rough = estimate_rough_tc(_T, _d["method3_norm"])
+        filtered_series_data[name]["Tc_rough"] = t_rough
+
         prep_rows.append(
             {
                 "Series": name,
                 "Loops": len(_T),
                 "T range [K]": f"{np.min(_T):.1f} to {np.max(_T):.1f}" if len(_T) > 0 else "N/A",
-                "median σT [K]": f"{np.median(_d['sigma_T_K']):.2f}",
+                "median sigmaT [K]": f"{np.median(_d['sigma_T_K']):.2f}",
                 "tail points (M3)": int(np.nanmedian(_d["tail_points"])),
+                "Rough Tc [K]": f"{t_rough:.1f}" if np.isfinite(t_rough) else "N/A",
             }
         )
 
@@ -620,19 +668,19 @@ def _(SERIES_ORDER, filtered_series_data, mo, np, pd, _transition_temp):
             {
                 "Series": name,
                 "Method": "M1 @ H=0",
-                "T(M=0.5) [K]": _transition_temp(_T, _d["method1_norm"]),
+                "T(M=0.5) [K]": transition_temp(_T, _d["method1_norm"]),
                 "Range(raw)": float(np.nanmax(_d["method1"]) - np.nanmin(_d["method1"])) if len(_T) > 0 else 0,
             },
             {
                 "Series": name,
                 "Method": "M2 saturation edges",
-                "T(M=0.5) [K]": _transition_temp(_T, _d["method2_norm"]),
+                "T(M=0.5) [K]": transition_temp(_T, _d["method2_norm"]),
                 "Range(raw)": float(np.nanmax(_d["method2"]) - np.nanmin(_d["method2"])) if len(_T) > 0 else 0,
             },
             {
                 "Series": name,
                 "Method": "M3 tail extrapolation",
-                "T(M=0.5) [K]": _transition_temp(_T, _d["method3_norm"]),
+                "T(M=0.5) [K]": transition_temp(_T, _d["method3_norm"]),
                 "Range(raw)": float(np.nanmax(_d["method3"]) - np.nanmin(_d["method3"])) if len(_T) > 0 else 0,
             }
         ])
@@ -649,7 +697,7 @@ def _(SERIES_ORDER, filtered_series_data, mo, np, pd, _transition_temp):
 
     {part_a_summary_df.to_markdown(index=False, floatfmt=".3f")}
     """)
-    return part_a_summary_df, prep_df
+    return
 
 
 @app.cell(hide_code=True)
@@ -726,14 +774,14 @@ def _(mo):
 
     Two fitting methods are applied to each series:
     1. **Far-field (mean-field near transition):** \(M(T)=A\sqrt{T_C-T}\)
-    2. **Curie–Weiss:** \(1/\chi(T)=(T-T_C)/C\)
+    2. **Curie-Weiss:** \(1/\chi(T)=(T-T_C)/C\)
 
     The requested third option (second-derivative divergence) is skipped here because the finite-point numerical second derivative is too unstable for these datasets and gives non-robust \(T_C\) estimates.
 
     **Regime Selection (Data Cutting)**
     The physical models are only valid in specific temperature regimes. To ensure robust fits, points outside these regimes are automatically masked:
     - **Far-field**: Only uses points where \(0.05 < M < 0.9\) to avoid saturation at low-T and finite-field smearing near \(T_c\).
-    - **Curie–Weiss**: Only uses points in the paramagnetic regime (above \(T_c + \text{buffer}\)).
+    - **Curie-Weiss**: Only uses points far away from the transition (\(T > 1.25 \times T_{c,\text{rough}}\)) to ensure the system is purely in the paramagnetic state.
 
     The plots below show the full slider-filtered range in light gray for context.
     """)
@@ -748,16 +796,19 @@ def _(SERIES_ORDER, filtered_series_data, fit_curie_weiss, fit_far_field, pd):
     for _series_name in SERIES_ORDER:
         _d = filtered_series_data[_series_name]
         _T = _d["T_K"]
+        _tr = _d["Tc_rough"]
         M = _d["method3_norm"]
         sM = _d["method3_sigma_norm"]
 
-        ff = fit_far_field(_T, M, sM, Tc_seed=215.0)
+        # Use rough Tc to define narrow fit regime
+        ff = fit_far_field(_T, M, sM, Tc_seed=215.0, T_rough=_tr)
         fit_results["far_field"][_series_name] = ff
         if ff["ok"]:
             fit_rows.append(
                 {
                     "Series": _series_name,
                     "Fit method": "Far-field",
+                    "Rough Tc [K]": _tr,
                     "Tc [K]": ff["Tc"],
                     "sigma Tc [K]": ff["sigma_Tc"],
                     "chi2/dof": ff["chi2_red"],
@@ -769,6 +820,7 @@ def _(SERIES_ORDER, filtered_series_data, fit_curie_weiss, fit_far_field, pd):
                 {
                     "Series": _series_name,
                     "Fit method": "Far-field",
+                    "Rough Tc [K]": _tr,
                     "Tc [K]": float("nan"),
                     "sigma Tc [K]": float("nan"),
                     "chi2/dof": float("nan"),
@@ -777,7 +829,7 @@ def _(SERIES_ORDER, filtered_series_data, fit_curie_weiss, fit_far_field, pd):
             )
 
         cw = fit_curie_weiss(
-            _T, _d["chi0"], _d["chi0_sigma"], Tc_seed=ff["Tc"] if ff["ok"] else 215.0
+            _T, _d["chi0"], _d["chi0_sigma"], Tc_seed=ff["Tc"] if ff["ok"] else 215.0, T_rough=_tr
         )
         fit_results["curie_weiss"][_series_name] = cw
         if cw["ok"]:
@@ -785,6 +837,7 @@ def _(SERIES_ORDER, filtered_series_data, fit_curie_weiss, fit_far_field, pd):
                 {
                     "Series": _series_name,
                     "Fit method": "Curie-Weiss",
+                    "Rough Tc [K]": _tr,
                     "Tc [K]": cw["Tc"],
                     "sigma Tc [K]": cw["sigma_Tc"],
                     "chi2/dof": cw["chi2_red"],
@@ -796,6 +849,7 @@ def _(SERIES_ORDER, filtered_series_data, fit_curie_weiss, fit_far_field, pd):
                 {
                     "Series": _series_name,
                     "Fit method": "Curie-Weiss",
+                    "Rough Tc [K]": _tr,
                     "Tc [K]": float("nan"),
                     "sigma Tc [K]": float("nan"),
                     "chi2/dof": float("nan"),
@@ -810,48 +864,51 @@ def _(SERIES_ORDER, filtered_series_data, fit_curie_weiss, fit_far_field, pd):
 @app.cell
 def _(SERIES_ORDER, fit_results, np, pd):
     def _():
-        comparison_rows = []
+        summary_stats = []
         for method_key, method_label in [
             ("far_field", "Far-field"),
             ("curie_weiss", "Curie-Weiss"),
         ]:
-            vals = []
-            sigs = []
-            chi2s = []
-            for _series_name in SERIES_ORDER:
-                res = fit_results[method_key][_series_name]
-                if res["ok"] and np.isfinite(res["sigma_Tc"]) and res["sigma_Tc"] > 0:
-                    vals.append(res["Tc"])
-                    sigs.append(res["sigma_Tc"])
-                    chi2s.append(res["chi2_red"])
+            def get_stats(series_list):
+                vals, sigs, chi2s = [], [], []
+                for name in series_list:
+                    res = fit_results[method_key][name]
+                    if res["ok"] and np.isfinite(res["sigma_Tc"]) and res["sigma_Tc"] > 0:
+                        vals.append(res["Tc"])
+                        sigs.append(res["sigma_Tc"])
+                        chi2s.append(res["chi2_red"])
 
-            if len(vals) > 0:
-                vals = np.asarray(vals, dtype=float)
-                sigs = np.asarray(sigs, dtype=float)
+                if not vals:
+                    return [np.nan] * 4 + [0]
+
+                vals, sigs = np.array(vals), np.array(sigs)
                 w = 1.0 / (sigs**2)
-                Tc_wmean = float(np.sum(w * vals) / np.sum(w))
-                Tc_wsigma = float(np.sqrt(1.0 / np.sum(w)))
-                Tc_std = float(np.std(vals, ddof=1)) if len(vals) > 1 else np.nan
-                chi2_med = float(np.median(chi2s))
-                n_good = len(vals)
-            else:
-                Tc_wmean = np.nan
-                Tc_wsigma = np.nan
-                Tc_std = np.nan
-                chi2_med = np.nan
-                n_good = 0
-            comparison_rows.append(
-                {
-                    "Method": method_label,
-                    "Series used": n_good,
-                    "Weighted Tc [K]": Tc_wmean,
-                    "Weighted sigma [K]": Tc_wsigma,
-                    "Inter-series std [K]": Tc_std,
-                    "Median chi2/dof": chi2_med,
-                }
-            )
+                w_mean = np.sum(w * vals) / np.sum(w)
+                w_sigma = np.sqrt(1.0 / np.sum(w))
+                std_dev = np.std(vals, ddof=1) if len(vals) > 1 else 0.0
+                return [w_mean, w_sigma, std_dev, np.median(chi2s), len(vals)]
 
-        return comparison_rows
+            all_stats = get_stats(SERIES_ORDER)
+            pref_stats = get_stats(["series A", "series B"])
+
+            summary_stats.append({
+                "Method": method_label,
+                "Scope": "All (A,B,C)",
+                "Weighted Tc [K]": all_stats[0],
+                "Weighted sigma [K]": all_stats[1],
+                "Series Count": int(all_stats[4]),
+                "Median chi2/dof": all_stats[3]
+            })
+            summary_stats.append({
+                "Method": method_label,
+                "Scope": "Preferred (A,B)",
+                "Weighted Tc [K]": pref_stats[0],
+                "Weighted sigma [K]": pref_stats[1],
+                "Series Count": int(pref_stats[4]),
+                "Median chi2/dof": pref_stats[3]
+            })
+
+        return summary_stats
 
     comparison_rows = _()
     comparison_df = pd.DataFrame(comparison_rows)
@@ -861,11 +918,12 @@ def _(SERIES_ORDER, fit_results, np, pd):
 @app.cell
 def _(comparison_df, fit_table_df, mo):
     mo.md(f"""
-    **Fit results per series**
+    ### Fit results per series
 
     {fit_table_df.to_markdown(index=False, floatfmt=".3f")}
 
-    **Method comparison**
+    ### Method comparison and Series C impact
+    The "Series Count" indicates how many measurements (out of the 3 or 2 requested) yielded a valid fit.
 
     {comparison_df.to_markdown(index=False, floatfmt=".3f")}
     """)
@@ -873,7 +931,15 @@ def _(comparison_df, fit_table_df, mo):
 
 
 @app.cell
-def _(COLORS, SERIES_ORDER, fit_results, filtered_series_data, sliders, np, plt):
+def _(
+    COLORS,
+    SERIES_ORDER,
+    filtered_series_data,
+    fit_results,
+    np,
+    plt,
+    sliders,
+):
     def _():
         fig, axs = plt.subplots(
             2, 3, figsize=(13.0, 6.2), sharex="col", gridspec_kw={"height_ratios": [3, 1]}
@@ -885,6 +951,10 @@ def _(COLORS, SERIES_ORDER, fit_results, filtered_series_data, sliders, np, plt)
 
             # Sync X-axis with sliders
             ax_top.set_xlim(sliders.value[_series_name])
+
+            # Display rough Tc estimate
+            _tr = filtered_series_data[_series_name]["Tc_rough"]
+            ax_top.axvline(_tr, color="gray", linestyle="--", alpha=0.5, label="Rough Tc")
 
             if res["ok"]:
                 _d = filtered_series_data[_series_name]
@@ -918,11 +988,11 @@ def _(COLORS, SERIES_ORDER, fit_results, filtered_series_data, sliders, np, plt)
                 ax_bot.axhline(0.0, color="k", lw=1.0)
                 ax_bot.plot(Tf, r, "o", ms=3, color=COLORS["fit"])
                 ax_bot.set_xlabel("Temperature [K]")
-                ax_bot.set_ylabel("res/σ")
+                ax_bot.set_ylabel("res/sigma")
             else:
                 ax_top.set_title(f"{_series_name} | Far-field (fit failed)")
                 ax_bot.set_xlabel("Temperature [K]")
-                ax_bot.set_ylabel("res/σ")
+                ax_bot.set_ylabel("res/sigma")
                 ax_top.text(
                     0.5,
                     0.5,
@@ -939,7 +1009,15 @@ def _(COLORS, SERIES_ORDER, fit_results, filtered_series_data, sliders, np, plt)
 
 
 @app.cell
-def _(COLORS, SERIES_ORDER, fit_results, filtered_series_data, sliders, np, plt):
+def _(
+    COLORS,
+    SERIES_ORDER,
+    filtered_series_data,
+    fit_results,
+    np,
+    plt,
+    sliders,
+):
     def _():
         fig, axs = plt.subplots(
             2, 3, figsize=(13.0, 6.2), sharex="col", gridspec_kw={"height_ratios": [3, 1]}
@@ -951,6 +1029,10 @@ def _(COLORS, SERIES_ORDER, fit_results, filtered_series_data, sliders, np, plt)
 
             # Sync X-axis with sliders
             ax_top.set_xlim(sliders.value[_series_name])
+
+            # Display rough Tc estimate
+            _tr = filtered_series_data[_series_name]["Tc_rough"]
+            ax_top.axvline(_tr, color="gray", linestyle="--", alpha=0.5, label="Rough Tc")
 
             if res["ok"]:
                 _d = filtered_series_data[_series_name]
@@ -985,11 +1067,11 @@ def _(COLORS, SERIES_ORDER, fit_results, filtered_series_data, sliders, np, plt)
                 ax_bot.axhline(0.0, color="k", lw=1.0)
                 ax_bot.plot(Tf, r, "o", ms=3, color=COLORS["fit"])
                 ax_bot.set_xlabel("Temperature [K]")
-                ax_bot.set_ylabel("res/σ")
+                ax_bot.set_ylabel("res/sigma")
             else:
                 ax_top.set_title(f"{_series_name} | Curie-Weiss (fit failed)")
                 ax_bot.set_xlabel("Temperature [K]")
-                ax_bot.set_ylabel("res/σ")
+                ax_bot.set_ylabel("res/sigma")
                 ax_top.text(
                     0.5,
                     0.5,
@@ -1020,12 +1102,13 @@ def _(comparison_df, mo):
     )
     best = "Far-field" if ff_good else "Curie-Weiss"
     best_row = row_ff if ff_good else row_cw
+    _Tc_rel_error = best_row["Weighted sigma [K]"] / best_row["Weighted Tc [K]"]
 
     mo.md(f"""
     ## Bottom line
 
     - Preferred method for final report: **{best}**
-    - Recommended Curie temperature estimate: **Tc = {best_row["Weighted Tc [K]"]:.2f} ± {best_row["Weighted sigma [K]"]:.2f} K**
+    - Recommended Curie temperature estimate: **Tc = {best_row["Weighted Tc [K]"]:.2f} ± {best_row["Weighted sigma [K]"]:.2f} ({_Tc_rel_error:.2g}%) K**
 
     This selection is based on the better residual behavior (lower median reduced chi-squared) and consistency across the three series.
     """)
