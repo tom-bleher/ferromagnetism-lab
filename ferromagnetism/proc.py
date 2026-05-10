@@ -189,7 +189,7 @@ def _():
 
 
 @app.cell
-def _(BREWER, FIG_DIR, np, pd, plt):
+def _(BREWER, FIG_DIR, pd, plt):
     _loop_path = (
         FIG_DIR.parent.parent
         / "curie"
@@ -407,7 +407,7 @@ def _(
     so the non-ideal amplitude correction is only {_integrator_gain_error_pct:.3f}%
     and the phase departure from an ideal integrator is {_integrator_phase_deg:.2f}°.
     """)
-    return A, B_per_Vy, C, H_per_Vx, L, N, Rx, Ry, u_Lp, u_V
+    return B_per_Vy, H_per_Vx, L, N, Rx, u_Lp, u_V
 
 
 @app.cell(hide_code=True)
