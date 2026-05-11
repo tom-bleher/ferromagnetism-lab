@@ -373,7 +373,7 @@ def _(SIGMA_Y_V, curve_fit, np):
             "n": int(len(Tf)),
         }
 
-    def fit_curie_weiss(T_K, chi, sigma_chi, Tc_seed=215.0, T_rough=None):
+    def fit_curie_weiss(T_K, chi, sigma_chi, Tc_seed=215.0, T_rough=None, cut_factor=1.25):
         _T = np.asarray(T_K, dtype=float)
         chi = np.asarray(chi, dtype=float)
         schi = np.asarray(sigma_chi, dtype=float)
@@ -388,7 +388,7 @@ def _(SIGMA_Y_V, curve_fit, np):
         sigma_inv = schi / np.maximum(chi, 1e-12) ** 2
 
         # CW is only valid in paramagnetic regime (far away from transition)
-        cut = 1.25 * (T_rough if T_rough is not None else Tc_seed)
+        cut = cut_factor * (T_rough if T_rough is not None else Tc_seed)
 
         fit_mask = mask & (_T >= cut)
         if np.sum(fit_mask) < 6:
@@ -778,7 +778,7 @@ def _(mo):
     **Regime Selection (Data Cutting)**
     The physical models are only valid in specific temperature regimes. To ensure robust fits, points outside these regimes are automatically masked:
     - **Far-field**: Only uses points where \(0.05 < M < 0.9\) to avoid saturation at low-T and finite-field smearing near \(T_c\).
-    - **Curie-Weiss**: Only uses points far away from the transition (\(T > 1.25 \times T_{c,\text{rough}}\)) to ensure the system is purely in the paramagnetic state.
+    - **Curie–Weiss**: Only uses points far away from the transition (\(T > \text{factor} \times T_{c,\text{rough}}\)) to ensure the system is purely in the paramagnetic state. This factor is controlled via an interactive slider and defaults to 1.25.
 
     The plots below show the full slider-filtered range in light gray for context.
     Fits are now performed on all three extraction methods (M1, M2, M3) to allow for consistency cross-checks.
@@ -787,7 +787,26 @@ def _(mo):
 
 
 @app.cell
-def _(SERIES_ORDER, filtered_series_data, fit_curie_weiss, fit_far_field):
+def _(mo):
+    cw_cut_factor = mo.ui.slider(
+        start=1.0,
+        stop=2.0,
+        step=0.01,
+        value=1.25,
+        label="Curie-Weiss Cut Factor (T > factor * Tc_rough)",
+    )
+    cw_cut_factor  # type: ignore
+    return (cw_cut_factor,)
+
+
+@app.cell
+def _(
+    SERIES_ORDER,
+    cw_cut_factor,
+    filtered_series_data,
+    fit_curie_weiss,
+    fit_far_field,
+):
     # fit_results[model][series][proxy_method]
     fit_results = {"far_field": {s: {} for s in SERIES_ORDER}, "curie_weiss": {s: {} for s in SERIES_ORDER}}
     proxy_methods = ["method1", "method2", "method3"]
@@ -806,7 +825,14 @@ def _(SERIES_ORDER, filtered_series_data, fit_curie_weiss, fit_far_field):
             fit_results["far_field"][_series_name][pm] = ff
 
             # Curie-Weiss fit (using M proxy as proxy for chi in paramagnetic regime)
-            cw = fit_curie_weiss(_T, M, sM, Tc_seed=ff["Tc"] if ff["ok"] else 215.0, T_rough=_tr)
+            cw = fit_curie_weiss(
+                _T,
+                M,
+                sM,
+                Tc_seed=ff["Tc"] if ff["ok"] else 215.0,
+                T_rough=_tr,
+                cut_factor=cw_cut_factor.value,
+            )
             fit_results["curie_weiss"][_series_name][pm] = cw
     return (fit_results,)
 
