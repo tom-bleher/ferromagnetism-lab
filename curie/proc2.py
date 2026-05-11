@@ -130,7 +130,6 @@ def _(mo):
     - **Automated Cleaning Applied**:
       - **Series C instability**: The measurement is clipped to the region *after* the initial magnetization peak to skip stabilization noise.
       - **Outliers**: Singular anomalies are identified using a 7-point rolling median threshold (Hampel filter) and removed from the extraction.
-      - **Stagnation Filter**: Data is clipped when the heating rate $dT/dt$ drops below 20% of the median rate to avoid thermal lag errors at high temperatures.
     - Built per-loop uncertainty arrays:
       - \(\sigma_T\): thermometer spec + temperature-resolution + finite-time drift
       - \(\sigma_X, \sigma_Y\): digitization uncertainty (uniform quantization model)
@@ -520,18 +519,8 @@ def _(
         # Threshold for 'singular points that are anomalies' (approx 4.5 sigma equivalent)
         is_outlier = m3_resid > (4.8 * max(m3_mad, 1e-6))
 
-        # 3. Heating Rate Cutoff: Remove "wonky" points at the end where heating stalls
-        dT_dt = np.gradient(T_K, time_s)
-        median_rate = np.median(dT_dt)
-        # Find where heating rate drops significantly (usually at the end of the run)
-        is_stalled = dT_dt < (0.2 * median_rate)
-        # Only apply stall cut to the latter half of the data to avoid start-up transients
-        # being caught here (start_idx already handles start-up)
-        stall_indices = np.where(is_stalled & (np.arange(n_loops) > n_loops / 2))[0]
-        end_idx = stall_indices[0] if len(stall_indices) > 0 else n_loops
-
         # Apply Cleaning Mask to all local variables before saving to dictionary
-        valid_points = (np.arange(n_loops) >= start_idx) & (np.arange(n_loops) < end_idx) & (~is_outlier)
+        valid_points = (np.arange(n_loops) >= start_idx) & (~is_outlier)
 
         T_C, T_K = T_C[valid_points], T_K[valid_points]
         time_s, sigma_T = time_s[valid_points], sigma_T[valid_points]
@@ -775,14 +764,14 @@ def _(mo):
 
     Two fitting methods are applied to each series:
     1. **Far-field (mean-field near transition):** \(M(T)=A\sqrt{T_C-T}\)
-    2. **Curie–Weiss:** \(1/\chi(T)=(T-T_C)/C\)
+    2. **Curie-Weiss:** \(1/\chi(T)=(T-T_C)/C\)
 
     The requested third option (second-derivative divergence) is skipped here because the finite-point numerical second derivative is too unstable for these datasets and gives non-robust \(T_C\) estimates.
 
     **Regime Selection (Data Cutting)**
     The physical models are only valid in specific temperature regimes. To ensure robust fits, points outside these regimes are automatically masked:
     - **Far-field**: Only uses points where \(0.05 < M < 0.9\) to avoid saturation at low-T and finite-field smearing near \(T_c\).
-    - **Curie–Weiss**: Only uses points far away from the transition (\(T > 1.25 \times T_{c,\text{rough}}\)) to ensure the system is purely in the paramagnetic state.
+    - **Curie-Weiss**: Only uses points far away from the transition (\(T > 1.25 \times T_{c,\text{rough}}\)) to ensure the system is purely in the paramagnetic state.
 
     The plots below show the full slider-filtered range in light gray for context.
     """)
