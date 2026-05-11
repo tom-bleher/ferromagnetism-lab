@@ -25,10 +25,8 @@ def _(mo):
     1. Setup and data preparation (including units and uncertainties)
     2. **Handling Instabilities**: Measurement C is automatically clipped to the region after its magnetization peak to remove initial stabilization instability.
     3. **Outlier Removal**: Singular anomalies are detected via a robust Hampel filter.
-    4. **Heating Rate Cutoff**: High-temperature points where the heating rate stalls (e.g., thermal equilibrium loss) are removed to ensure Curie-Weiss linearity.
-    5. Part A: extraction of magnetization proxies (M1, M2, M3) from loop geometries.
+    4. Part A: extraction of magnetization proxies (M1, M2, M3) from loop geometries.
     5. **Rough Tc Estimation**: Numerical second-derivatives are used to find the transition inflection point.
-    6. **Arrott Plot Analysis**: Extraction of Tc using thermodynamic isotherms in the $M^2$ vs $H/M$ coordinate system.
     6. Part B: Refined Curie temperature extraction using restricted temperature regimes.
 
     **Notation**
@@ -47,7 +45,6 @@ def _():
     import matplotlib.pyplot as plt
     import numpy as np
     import pandas as pd
-    from scipy.signal import savgol_filter
     from scipy.optimize import curve_fit
 
     plt.rcParams.update(
@@ -67,7 +64,7 @@ def _():
         "fit": "#e7298a",
         "data": "#1f77b4",
     }
-    return COLORS, Path, curve_fit, np, pd, plt, savgol_filter
+    return COLORS, Path, curve_fit, np, pd, plt
 
 
 @app.cell
@@ -143,7 +140,7 @@ def _(mo):
 
 
 @app.cell
-def _(SIGMA_Y_V, curve_fit, np, savgol_filter):
+def _(SIGMA_Y_V, curve_fit, np):
     def sorted_channel_columns(df, prefix):
         cols = [c for c in df.columns if c.startswith(prefix)]
         return sorted(cols, key=lambda c: int(c[len(prefix):]))
@@ -310,6 +307,7 @@ def _(SIGMA_Y_V, curve_fit, np, savgol_filter):
         if len(T) < 10:
             return np.nan
         # Smooth to avoid noise in derivatives
+        from scipy.signal import savgol_filter
         M_smooth = savgol_filter(M, window_length=9, polyorder=3)
         # Find where the curve drops fastest (inflection point)
         d2M = np.gradient(np.gradient(M_smooth, T), T)
@@ -379,7 +377,10 @@ def _(SIGMA_Y_V, curve_fit, np, savgol_filter):
         _T = np.asarray(T_K, dtype=float)
         chi = np.asarray(chi, dtype=float)
         schi = np.asarray(sigma_chi, dtype=float)
-        mask = np.isfinite(_T) & np.isfinite(chi) & np.isfinite(schi) & (chi > 0.0)
+
+        # Mask points where magnetization is too small (approaching the noise floor)
+        # to avoid the 1/M singularity.
+        mask = np.isfinite(_T) & np.isfinite(chi) & np.isfinite(schi) & (chi > 0.02)
         if np.sum(mask) < 10:
             return {"ok": False, "reason": "insufficient chi points"}
 
@@ -647,7 +648,7 @@ def _(
                 "Series": name,
                 "Loops": len(_T),
                 "T range [K]": f"{np.min(_T):.1f} to {np.max(_T):.1f}" if len(_T) > 0 else "N/A",
-                "median sigmaT [K]": f"{np.median(_d['sigma_T_K']):.2f}",
+                "median sigma T [K]": f"{np.median(_d['sigma_T_K']):.2f}",
                 "tail points (M3)": int(np.nanmedian(_d["tail_points"])),
                 "Rough Tc [K]": f"{t_rough:.1f}" if np.isfinite(t_rough) else "N/A",
             }
@@ -766,7 +767,13 @@ def _(mo):
     1. **Far-field (mean-field near transition):** \(M(T)=A\sqrt{T_C-T}\)
     2. **Curie-Weiss:** \(1/\chi(T)=(T-T_C)/C\)
 
-    The requested third option (second-derivative divergence) is skipped here because the finite-point numerical second derivative is too unstable for these datasets and gives non-robust \(T_C\) estimates.
+    **Rough $T_c$ Estimate**
+    Before performing non-linear fits, we calculate a model-independent "Rough $T_c$" to automate regime selection. The process involves:
+    1. **Smoothing**: Magnetization data ($M_3$) is smoothed using a Savitzky-Golay filter (window length 9, polynomial order 3) to suppress numerical noise.
+    2. **Differentiation**: We compute the numerical second derivative $\frac{d^2M}{dT^2}$ using central differences.
+    3. **Localization**: We identify $T_{c,\text{rough}}$ as the temperature where $|\frac{d^2M}{dT^2}|$ is maximized.
+
+    Physically, this locates the "knee" of the transition—the point of maximum curvature where the ferromagnetic drop-off enters the paramagnetic tail. This estimate is used to set the upper bound for Far-field fits and the lower bound for Curie-Weiss fits.
 
     **Regime Selection (Data Cutting)**
     The physical models are only valid in specific temperature regimes. To ensure robust fits, points outside these regimes are automatically masked:
@@ -774,148 +781,153 @@ def _(mo):
     - **Curie-Weiss**: Only uses points far away from the transition (\(T > 1.25 \times T_{c,\text{rough}}\)) to ensure the system is purely in the paramagnetic state.
 
     The plots below show the full slider-filtered range in light gray for context.
+    Fits are now performed on all three extraction methods (M1, M2, M3) to allow for consistency cross-checks.
     """)
     return
 
 
 @app.cell
-def _(SERIES_ORDER, filtered_series_data, fit_curie_weiss, fit_far_field, pd):
-    fit_results = {"far_field": {}, "curie_weiss": {}}
-    fit_rows = []
+def _(SERIES_ORDER, filtered_series_data, fit_curie_weiss, fit_far_field):
+    # fit_results[model][series][proxy_method]
+    fit_results = {"far_field": {s: {} for s in SERIES_ORDER}, "curie_weiss": {s: {} for s in SERIES_ORDER}}
+    proxy_methods = ["method1", "method2", "method3"]
 
     for _series_name in SERIES_ORDER:
         _d = filtered_series_data[_series_name]
         _T = _d["T_K"]
         _tr = _d["Tc_rough"]
-        M = _d["method3_norm"]
-        sM = _d["method3_sigma_norm"]
 
-        # Use rough Tc to define narrow fit regime
-        ff = fit_far_field(_T, M, sM, Tc_seed=215.0, T_rough=_tr)
-        fit_results["far_field"][_series_name] = ff
-        if ff["ok"]:
-            fit_rows.append(
-                {
-                    "Series": _series_name,
-                    "Fit method": "Far-field",
-                    "Rough Tc [K]": _tr,
-                    "Tc [K]": ff["Tc"],
-                    "sigma Tc [K]": ff["sigma_Tc"],
-                    "chi2/dof": ff["chi2_red"],
-                    "Nfit": ff["n"],
-                }
-            )
-        else:
-            fit_rows.append(
-                {
-                    "Series": _series_name,
-                    "Fit method": "Far-field",
-                    "Rough Tc [K]": _tr,
-                    "Tc [K]": float("nan"),
-                    "sigma Tc [K]": float("nan"),
-                    "chi2/dof": float("nan"),
-                    "Nfit": 0,
-                }
-            )
+        for pm in proxy_methods:
+            M = _d[f"{pm}_norm"]
+            sM = _d[f"{pm}_sigma_norm"]
 
-        cw = fit_curie_weiss(
-            _T, _d["chi0"], _d["chi0_sigma"], Tc_seed=ff["Tc"] if ff["ok"] else 215.0, T_rough=_tr
-        )
-        fit_results["curie_weiss"][_series_name] = cw
-        if cw["ok"]:
-            fit_rows.append(
-                {
-                    "Series": _series_name,
-                    "Fit method": "Curie-Weiss",
-                    "Rough Tc [K]": _tr,
-                    "Tc [K]": cw["Tc"],
-                    "sigma Tc [K]": cw["sigma_Tc"],
-                    "chi2/dof": cw["chi2_red"],
-                    "Nfit": cw["n"],
-                }
-            )
-        else:
-            fit_rows.append(
-                {
-                    "Series": _series_name,
-                    "Fit method": "Curie-Weiss",
-                    "Rough Tc [K]": _tr,
-                    "Tc [K]": float("nan"),
-                    "sigma Tc [K]": float("nan"),
-                    "chi2/dof": float("nan"),
-                    "Nfit": 0,
-                }
-            )
+            # Far-field fit
+            ff = fit_far_field(_T, M, sM, Tc_seed=215.0, T_rough=_tr)
+            fit_results["far_field"][_series_name][pm] = ff
 
-    fit_table_df = pd.DataFrame(fit_rows)
-    return fit_results, fit_table_df
+            # Curie-Weiss fit (using M proxy as proxy for chi in paramagnetic regime)
+            cw = fit_curie_weiss(_T, M, sM, Tc_seed=ff["Tc"] if ff["ok"] else 215.0, T_rough=_tr)
+            fit_results["curie_weiss"][_series_name][pm] = cw
+    return (fit_results,)
 
 
 @app.cell
 def _(SERIES_ORDER, fit_results, np, pd):
-    def _():
-        summary_stats = []
-        for method_key, method_label in [
-            ("far_field", "Far-field"),
-            ("curie_weiss", "Curie-Weiss"),
-        ]:
-            def get_stats(series_list):
-                vals, sigs, chi2s = [], [], []
-                for name in series_list:
-                    res = fit_results[method_key][name]
+    proxy_keys = ["method1", "method2", "method3"]
+    proxy_labels = {"method1": "M1 (Inter.)", "method2": "M2 (Sat.)", "method3": "M3 (Tail)"}
+
+    fit_table_rows = []
+    for model_key, model_label in [("far_field", "Far-field"), ("curie_weiss", "Curie-Weiss")]:
+        for series in SERIES_ORDER:
+            row = {"Series": series, "Model": model_label}
+            vals, sigs = [], []
+
+            for pk in proxy_keys:
+                res = fit_results[model_key][series][pk]
+                if res["ok"]:
+                    row[proxy_labels[pk]] = f"{res['Tc']:.2f} ± {res['sigma_Tc']:.2f}"
+                    vals.append(res["Tc"])
+                    sigs.append(res["sigma_Tc"])
+                else:
+                    row[proxy_labels[pk]] = "Fail"
+
+            if vals:
+                w = 1.0 / (np.array(sigs, dtype=float)**2)
+                w_mean = np.sum(w * vals) / np.sum(w)
+                w_sigma = np.sqrt(1.0 / np.sum(w))
+                row["Weighted Avg Tc [K]"] = f"{w_mean:.2f} ± {w_sigma:.2f}"
+            else:
+                row["Weighted Avg Tc [K]"] = "N/A"
+            fit_table_rows.append(row)
+
+    summary_stats = []
+    for method_key, method_label in [
+        ("far_field", "Far-field"),
+        ("curie_weiss", "Curie-Weiss"),
+    ]:
+        def get_stats(series_list):
+            vals, sigs, chi2s = [], [], []
+            for series in series_list:
+                for pm in proxy_keys:
+                    res = fit_results[method_key][series][pm]
                     if res["ok"] and np.isfinite(res["sigma_Tc"]) and res["sigma_Tc"] > 0:
                         vals.append(res["Tc"])
                         sigs.append(res["sigma_Tc"])
                         chi2s.append(res["chi2_red"])
 
-                if not vals:
-                    return [np.nan] * 4 + [0]
+            if not vals:
+                return [np.nan] * 4 + [0]
 
-                vals, sigs = np.array(vals), np.array(sigs)
-                w = 1.0 / (sigs**2)
-                w_mean = np.sum(w * vals) / np.sum(w)
-                w_sigma = np.sqrt(1.0 / np.sum(w))
-                std_dev = np.std(vals, ddof=1) if len(vals) > 1 else 0.0
-                return [w_mean, w_sigma, std_dev, np.median(chi2s), len(vals)]
+            vals, sigs = np.array(vals), np.array(sigs)
+            w = 1.0 / (sigs**2)
+            w_mean = np.sum(w * vals) / np.sum(w)
+            w_sigma = np.sqrt(1.0 / np.sum(w))
+            std_dev = np.std(vals, ddof=1) if len(vals) > 1 else 0.0
+            return [w_mean, w_sigma, std_dev, np.median(chi2s), len(vals)]
 
-            all_stats = get_stats(SERIES_ORDER)
-            pref_stats = get_stats(["series A", "series B"])
+        all_stats = get_stats(SERIES_ORDER)
+        pref_stats = get_stats(["series A", "series B"])
 
-            summary_stats.append({
-                "Method": method_label,
-                "Scope": "All (A,B,C)",
-                "Weighted Tc [K]": all_stats[0],
-                "Weighted sigma [K]": all_stats[1],
-                "Series Count": int(all_stats[4]),
-                "Median chi2/dof": all_stats[3]
-            })
-            summary_stats.append({
-                "Method": method_label,
-                "Scope": "Preferred (A,B)",
-                "Weighted Tc [K]": pref_stats[0],
-                "Weighted sigma [K]": pref_stats[1],
-                "Series Count": int(pref_stats[4]),
-                "Median chi2/dof": pref_stats[3]
-            })
+        summary_stats.append({
+            "Method": method_label,
+            "Scope": "All (A,B,C)",
+            "Weighted Tc [K]": all_stats[0],
+            "Weighted sigma [K]": all_stats[1],
+            "Total Fits": int(all_stats[4]),
+            "Median chi2/dof": all_stats[3]
+        })
+        summary_stats.append({
+            "Method": method_label,
+            "Scope": "Preferred (A,B)",
+            "Weighted Tc [K]": pref_stats[0],
+            "Weighted sigma [K]": pref_stats[1],
+            "Total Fits": int(pref_stats[4]),
+            "Median chi2/dof": pref_stats[3]
+        })
 
-        return summary_stats
+    impact_rows = []
+    for model_key, model_label in [("far_field", "Far-field"), ("curie_weiss", "Curie-Weiss")]:
+        for scope_label, series_list in [("All (A,B,C)", SERIES_ORDER), ("Preferred (A,B)", ["series A", "series B"])]:
+            i_row = {"Model": model_label, "Scope": scope_label}
+            for pk in proxy_keys:
+                v, s = [], []
+                for series in series_list:
+                    res = fit_results[model_key][series][pk]
+                    if res["ok"] and np.isfinite(res["sigma_Tc"]) and res["sigma_Tc"] > 0:
+                        v.append(res["Tc"])
+                        s.append(res["sigma_Tc"])
+                if v:
+                    w = 1.0 / (np.array(s, dtype=float)**2)
+                    wm = np.sum(w * v) / np.sum(w)
+                    ws = np.sqrt(1.0 / np.sum(w))
+                    i_row[proxy_labels[pk]] = f"{wm:.2f} ± {ws:.2f}"
+                else:
+                    i_row[proxy_labels[pk]] = "N/A"
+            impact_rows.append(i_row)
 
-    comparison_rows = _()
-    comparison_df = pd.DataFrame(comparison_rows)
-    return (comparison_df,)
+    df_summary = pd.DataFrame(summary_stats)
+    df_fit_table = pd.DataFrame(fit_table_rows)
+    df_method_impact = pd.DataFrame(impact_rows)
+    return df_fit_table, df_method_impact, df_summary
 
 
 @app.cell
-def _(comparison_df, fit_table_df, mo):
+def _(df_fit_table, df_method_impact, df_summary, mo):
     mo.md(f"""
-    ### Fit results per series
+    ### Curie Temperature Results Table
+    This table shows $T_c$ estimates for each model and series, computed across all three magnetization extraction methods (M1, M2, M3).
 
-    {fit_table_df.to_markdown(index=False, floatfmt=".3f")}
+    {df_fit_table.to_markdown(index=False)}
 
-    ### Method comparison and Series C impact
-    The "Series Count" indicates how many measurements (out of the 3 or 2 requested) yielded a valid fit.
+    ### Overall Method comparison and Series C impact
+    "Total Fits" counts successful fits across all proxies and series in the scope.
 
-    {comparison_df.to_markdown(index=False, floatfmt=".3f")}
+    {df_summary.to_markdown(index=False, floatfmt=".3f")}
+
+    ### Method Consistency (Comparison of Part A proxies)
+    This table compares the weighted average $T_c$ (across measurements) for each extraction method, allowing us to evaluate the impact of the magnetization proxy choice on the final $T_c$.
+
+    {df_method_impact.to_markdown(index=False)}
     """)
     return
 
@@ -931,66 +943,49 @@ def _(
     sliders,
 ):
     def _():
-        fig, axs = plt.subplots(
-            2, 3, figsize=(13.0, 6.2), sharex="col", gridspec_kw={"height_ratios": [3, 1]}
-        )
+        fig, axs = plt.subplots(2, 3, figsize=(14, 7), sharex="col", gridspec_kw={"height_ratios": [3, 1]})
+        proxy_methods = ["method1", "method2", "method3"]
+        proxy_colors = {"method1": COLORS["m1"], "method2": COLORS["m2"], "method3": COLORS["m3"]}
+
         for j, _series_name in enumerate(SERIES_ORDER):
-            res = fit_results["far_field"][_series_name]
             ax_top = axs[0, j]
             ax_bot = axs[1, j]
+            _d = filtered_series_data[_series_name]
 
             # Sync X-axis with sliders
             ax_top.set_xlim(sliders.value[_series_name])
+            _tr = _d["Tc_rough"]
+            ax_top.axvline(_tr, color="black", linestyle="--", alpha=0.4, label="Rough Tc")
+            ax_top.set_title(f"{_series_name} | Far-field Fit")
 
-            # Display rough Tc estimate
-            _tr = filtered_series_data[_series_name]["Tc_rough"]
-            ax_top.axvline(_tr, color="gray", linestyle="--", alpha=0.5, label="Rough Tc")
+            for pm in proxy_methods:
+                res = fit_results["far_field"][_series_name][pm]
+                color = proxy_colors[pm]
 
-            if res["ok"]:
-                _d = filtered_series_data[_series_name]
-                ax_top.plot(_d["T_K"], _d["method3_norm"], "o", ms=2, color="lightgray", alpha=0.4, label="excluded from fit")
+                if res["ok"]:
+                    Tf, yf, sf, r = res["T_fit"], res["y_fit"], res["sigma_fit"], res["residuals"]
+                    Tc, A = res["Tc"], res["A"]
 
-                Tf = res["T_fit"]
-                yf = res["y_fit"]
-                sf = res["sigma_fit"]
-                r = res["residuals"]
+                    # Plot full data in background
+                    ax_top.plot(_d["T_K"], _d[f"{pm}_norm"], "o", ms=2, color=color, alpha=0.15)
 
-                xline = np.linspace(np.min(Tf), np.max(Tf), 200)
-                Tc = res["Tc"]
-                A = res["A"]
-                yline = A * np.sqrt(np.clip(Tc - xline, 0.0, None))
+                    # Plot fit data
+                    ax_top.errorbar(Tf, yf, yerr=sf, fmt="o", ms=3, color=color, alpha=0.6)
 
-                ax_top.errorbar(
-                    Tf, yf, yerr=sf, fmt="o", ms=3, color=COLORS["data"], label="data"
-                )
-                ax_top.plot(
-                    xline,
-                    yline,
-                    "-",
-                    color=COLORS["fit"],
-                    lw=1.5,
-                    label=f"fit Tc={Tc:.2f} K",
-                )
-                ax_top.set_title(f"{_series_name} | Far-field")
-                ax_top.set_ylabel("M (normalized)")
-                ax_top.legend(loc="best", fontsize=8)
+                    # Plot model
+                    xline = np.linspace(np.min(Tf), np.max(Tf), 100)
+                    yline = A * np.sqrt(np.clip(Tc - xline, 0.0, None))
+                    ax_top.plot(xline, yline, "-", color=color, lw=1.8, label=f"{pm}: Tc={Tc:.1f}K")
 
-                ax_bot.axhline(0.0, color="k", lw=1.0)
-                ax_bot.plot(Tf, r, "o", ms=3, color=COLORS["fit"])
-                ax_bot.set_xlabel("Temperature [K]")
-                ax_bot.set_ylabel("res/sigma")
-            else:
-                ax_top.set_title(f"{_series_name} | Far-field (fit failed)")
-                ax_bot.set_xlabel("Temperature [K]")
-                ax_bot.set_ylabel("res/sigma")
-                ax_top.text(
-                    0.5,
-                    0.5,
-                    "No stable fit",
-                    ha="center",
-                    va="center",
-                    transform=ax_top.transAxes,
-                )
+                    # Residuals
+                    ax_bot.plot(Tf, r, "o", ms=2.5, color=color, alpha=0.7)
+
+            ax_top.set_ylabel("M (normalized)")
+            ax_top.legend(loc="lower left", fontsize=7)
+            ax_bot.axhline(0.0, color="k", lw=0.8)
+            ax_bot.set_xlabel("Temperature [K]")
+            ax_bot.set_ylabel("res/sigma")
+
         fig.tight_layout()
         return fig
 
@@ -1009,67 +1004,56 @@ def _(
     sliders,
 ):
     def _():
-        fig, axs = plt.subplots(
-            2, 3, figsize=(13.0, 6.2), sharex="col", gridspec_kw={"height_ratios": [3, 1]}
-        )
+        fig, axs = plt.subplots(2, 3, figsize=(14, 7), sharex="col", gridspec_kw={"height_ratios": [3, 1]})
+        proxy_methods = ["method1", "method2", "method3"]
+        proxy_colors = {"method1": COLORS["m1"], "method2": COLORS["m2"], "method3": COLORS["m3"]}
+
         for j, _series_name in enumerate(SERIES_ORDER):
-            res = fit_results["curie_weiss"][_series_name]
             ax_top = axs[0, j]
             ax_bot = axs[1, j]
+            _d = filtered_series_data[_series_name]
 
             # Sync X-axis with sliders
             ax_top.set_xlim(sliders.value[_series_name])
+            _tr = _d["Tc_rough"]
+            ax_top.axvline(_tr, color="black", linestyle="--", alpha=0.4, label="Rough Tc")
+            ax_top.set_title(f"{_series_name} | Curie-Weiss Fit")
+            y_max_fit = 0.0
 
-            # Display rough Tc estimate
-            _tr = filtered_series_data[_series_name]["Tc_rough"]
-            ax_top.axvline(_tr, color="gray", linestyle="--", alpha=0.5, label="Rough Tc")
+            for pm in proxy_methods:
+                res = fit_results["curie_weiss"][_series_name][pm]
+                color = proxy_colors[pm]
 
-            if res["ok"]:
-                _d = filtered_series_data[_series_name]
-                _inv_chi_full = 1.0 / np.maximum(_d["chi0"], 1e-12)
-                ax_top.plot(_d["T_K"], _inv_chi_full, "o", ms=2, color="lightgray", alpha=0.4, label="excluded from fit")
+                if res["ok"]:
+                    Tf, yf, sf, r = res["T_fit"], res["y_fit"], res["sigma_fit"], res["residuals"]
+                    Tc, C = res["Tc"], res["C"]
+                    y_max_fit = max(y_max_fit, np.max(yf))
 
-                Tf = res["T_fit"]
-                yf = res["y_fit"]
-                sf = res["sigma_fit"]
-                r = res["residuals"]
+                    # Plot full inverse data in background
+                    inv_full = 1.0 / np.maximum(_d[f"{pm}_norm"], 1e-12)
+                    ax_top.plot(_d["T_K"], inv_full, "o", ms=2, color=color, alpha=0.1)
 
-                xline = np.linspace(float(min(Tf)), float(max(Tf)), 200)
-                Tc = res["Tc"]
-                C = res["C"]
-                yline = (xline - Tc) / C
+                    # Plot fit data
+                    ax_top.errorbar(Tf, yf, yerr=sf, fmt="o", ms=3, color=color, alpha=0.6)
 
-                ax_top.errorbar(
-                    Tf, yf, yerr=sf, fmt="o", ms=3, color=COLORS["data"], label="data"
-                )
-                ax_top.plot(
-                    xline,
-                    yline,
-                    "-",
-                    color=COLORS["fit"],
-                    lw=1.5,
-                    label=f"fit Tc={Tc:.2f} K",
-                )
-                ax_top.set_title(f"{_series_name} | Curie-Weiss")
-                ax_top.set_ylabel("1/χ (arb. units)")
-                ax_top.legend(loc="best", fontsize=8)
+                    # Plot model
+                    xline = np.linspace(np.min(Tf), np.max(Tf), 100)
+                    yline = (xline - Tc) / C
+                    ax_top.plot(xline, yline, "-", color=color, lw=1.8, label=f"{pm}: Tc={Tc:.1f}K")
 
-                ax_bot.axhline(0.0, color="k", lw=1.0)
-                ax_bot.plot(Tf, r, "o", ms=3, color=COLORS["fit"])
-                ax_bot.set_xlabel("Temperature [K]")
-                ax_bot.set_ylabel("res/sigma")
-            else:
-                ax_top.set_title(f"{_series_name} | Curie-Weiss (fit failed)")
-                ax_bot.set_xlabel("Temperature [K]")
-                ax_bot.set_ylabel("res/sigma")
-                ax_top.text(
-                    0.5,
-                    0.5,
-                    "No stable fit",
-                    ha="center",
-                    va="center",
-                    transform=ax_top.transAxes,
-                )
+                    # Residuals
+                    ax_bot.plot(Tf, r, "o", ms=2.5, color=color, alpha=0.7)
+
+            # Limit y-axis to fitted range to prevent 1/0 singularity from flattening the plot
+            if y_max_fit > 0:
+                ax_top.set_ylim(-0.05 * y_max_fit, 1.5 * y_max_fit)
+
+            ax_top.set_ylabel("1/M (normalized)")
+            ax_top.legend(loc="best", fontsize=7)
+            ax_bot.axhline(0.0, color="k", lw=0.8)
+            ax_bot.set_xlabel("Temperature [K]")
+            ax_bot.set_ylabel("res/sigma")
+
         fig.tight_layout()
         return fig
 
@@ -1078,169 +1062,9 @@ def _(
 
 
 @app.cell
-def _(mo):
-    mo.md(r"""
-    ## Part C — Arrott Plot Analysis
-
-    An **Arrott plot** is a visualization of isotherms in the coordinate system of $M^2$ versus $H/M$. According to the Ginzburg-Landau mean-field theory, near the transition temperature $T_c$, these isotherms should be approximately parallel straight lines. The isotherm that passes through the origin corresponds to $T = T_c$.
-
-    By extrapolating the linear high-field portion of each isotherm to the $M^2$ axis (the $H/M \to 0$ intercept), we obtain the squared spontaneous magnetization $M_s^2(T)$. We then fit $M_s^2$ versus $T$ to find the temperature where spontaneous magnetization vanishes ($M_s^2 = 0$), which provides our estimate for $T_c$.
-    """)
-    return
-
-
-@app.cell
-def _(
-    COLORS,
-    SERIES_ORDER,
-    curve_fit,
-    filtered_series_data,
-    np,
-    pd,
-    plt,
-    savgol_filter,
-    sliders,
-):
-    def _run_arrott():
-        _arrott_results = {}
-        _arrott_rows = []
-        for _name in SERIES_ORDER:
-            _d = filtered_series_data[_name]
-            _Ts, _Xp, _Yp, _Yn = _d["T_K"], _d["X_pos"], _d["Y_pos"], _d["Y_neg"]
-            _ms_sq, _ms_sq_sigma, _valid_Ts = [], [], []
-            _isotherms = []
-
-            # Characteristic indices for the Arrott plot isotherms
-            _plot_idx = np.linspace(0, len(_Ts) - 1, 7, dtype=int)
-
-            for _i in range(len(_Ts)):
-                _n_tail = int(_d["tail_points"][_i])
-                if _n_tail < 5:
-                    continue
-                # Extract H and M proxies: M is half-difference of branches
-                _h_all = _Xp[_i]
-                _m_all = 0.5 * (_Yp[_i] - _Yn[_i][::-1])
-                _idx = np.argsort(_h_all)[-_n_tail:]
-                _h, _m = _h_all[_idx], _m_all[_idx]
-                _mask = _m > 0
-                if np.sum(_mask) < 4:
-                    continue
-                _arr_y, _arr_x = _m[_mask] ** 2, _h[_mask] / _m[_mask]
-                try:
-                    _p, _cov = np.polyfit(_arr_x, _arr_y, 1, cov=True)
-                    _ms_sq.append(_p[1])
-                    _ms_sq_sigma.append(np.sqrt(_cov[1, 1]))
-                    _valid_Ts.append(_Ts[_i])
-
-                    if _i in _plot_idx:
-                        _isotherms.append({
-                            "T": _Ts[_i],
-                            "x": _arr_x,
-                            "y": _arr_y,
-                            "fit_y": _p[0] * _arr_x + _p[1]
-                        })
-                except Exception:
-                    continue
-            _T_arr, _M2_arr, _sM2_arr = np.array(_valid_Ts), np.array(_ms_sq), np.array(_ms_sq_sigma)
-
-            # Identify the linearly sloped middle section by analyzing the gradient
-            if len(_T_arr) > 12:
-                # Sort to ensure gradient is meaningful
-                _srt = np.argsort(_T_arr)
-                _T_s, _M2_s, _sM2_s = _T_arr[_srt], _M2_arr[_srt], _sM2_arr[_srt]
-                # Smooth intercepts to find the stable descent plateau
-                _m2_smooth = savgol_filter(_M2_s, window_length=9, polyorder=2)
-                _grad = np.gradient(_m2_smooth, _T_s)
-
-                # Find region of significant descent (avoiding the saturated low-T and noisy high-T tail)
-                _min_grad = np.min(_grad)
-                _fit_mask = (_grad < 0.6 * _min_grad) & (_M2_s > 0.15 * np.max(_M2_s))
-                _T_arr, _M2_arr, _sM2_arr = _T_s, _M2_s, _sM2_s
-            else:
-                _fit_mask = (_M2_arr > 0.1 * np.max(_M2_arr)) & (_M2_arr < 0.9 * np.max(_M2_arr))
-
-            if np.sum(_fit_mask) > 5:
-                _Tf, _yf, _syf = _T_arr[_fit_mask], _M2_arr[_fit_mask], _sM2_arr[_fit_mask]
-                try:
-                    _p_out, _c_out = curve_fit(lambda t, s, tc: s * (tc - t), _Tf, _yf, p0=[1e-3, 215.0], sigma=_syf)
-                    _tc, _stc = _p_out[1], np.sqrt(_c_out[1, 1])
-                    _arrott_rows.append({"Series": _name, "Tc [K]": _tc, "sigma Tc [K]": _stc})
-                    _arrott_results[_name] = {
-                        "ok": True, "Tc": _tc, "T": _T_arr, "M2": _M2_arr,
-                        "Tf": _Tf, "yf": _yf, "yp": _p_out[0] * (_p_out[1] - _Tf),
-                        "isotherms": _isotherms
-                    }
-                except Exception:
-                    _arrott_results[_name] = {"ok": False, "isotherms": _isotherms}
-            else:
-                _arrott_results[_name] = {"ok": False, "isotherms": _isotherms}
-        return _arrott_results, pd.DataFrame(_arrott_rows)
-
-    arrott_results, arrott_summary_df = _run_arrott()
-
-    # 1. Plot the actual Arrott isotherms: M^2 vs H/M
-    fig_iso, axs_iso = plt.subplots(1, 3, figsize=(13, 4))
-    for _i, _name in enumerate(SERIES_ORDER):
-        _ax = axs_iso[_i]
-        _res = arrott_results[_name]
-        if "isotherms" in _res:
-            _cmap = plt.get_cmap("plasma")
-            _T_min_run, _T_max_run = sliders.value[_name]
-            for _iso in _res["isotherms"]:
-                _c = _cmap((_iso["T"] - _T_min_run) / max(_T_max_run - _T_min_run, 1e-3))
-                _ax.plot(_iso["x"], _iso["y"], "o", ms=3, color=_c, alpha=0.5)
-                _ax.plot(_iso["x"], _iso["fit_y"], "-", lw=1, color=_c, label=f"{_iso['T']:.1f} K")
-        _ax.set_title(f"{_name} | Arrott Plot ($M^2$ vs $H/M$)")
-        _ax.set_xlabel("$H/M$ (relative)")
-        _ax.set_ylabel("$M^2$ (relative)")
-        _ax.legend(loc="best", fontsize=7)
-    fig_iso.tight_layout()
-
-    # 2. Plot the Spontaneous Magnetization Intercepts: Ms^2 vs T
-    fig_ms, axs_ms = plt.subplots(1, 3, figsize=(13, 4))
-    for _i, _name in enumerate(SERIES_ORDER):
-        _ax = axs_ms[_i]
-
-        # Sync X-axis with sliders
-        _ax.set_xlim(sliders.value[_name])
-
-        _res = arrott_results[_name]
-        if "T" in _res:
-            _ax.errorbar(_res["T"], _res["M2"], fmt="o", ms=3, color="lightgray", alpha=0.5)
-        if _res.get("ok"):
-            _ax.plot(_res["Tf"], _res["yf"], "o", ms=4, color=COLORS["data"], label="fit data")
-            _ax.plot(_res["Tf"], _res["yp"], "-", color=COLORS["fit"], label=f"Tc={_res['Tc']:.2f} K")
-        _ax.axhline(0, color="k", lw=0.8)
-        _ax.set_title(f"{_name} | Spontaneous Magnetization $M_s^2$")
-        _ax.set_xlabel("Temperature [K]")
-        _ax.set_ylabel("$M_s^2$ (intercept)")
-        _ax.legend(loc="best", fontsize=8)
-    fig_ms.tight_layout()
-    return arrott_summary_df, fig_iso, fig_ms
-
-
-@app.cell
-def _(arrott_summary_df, fig_iso, fig_ms, mo):
-    mo.md(f"""
-    ### Arrott Plot Results
-
-    The Arrott plots below show isotherms in the $M^2$ vs $H/M$ plane. The intercept with the vertical axis ($M^2$) at $H/M=0$ gives the spontaneous magnetization $M_s^2$.
-
-    {mo.as_html(fig_iso)}
-
-    Extracted spontaneous magnetization intercepts $M_s^2(T)$ are shown below. The zero-crossing identifies the transition temperature $T_c$.
-
-    {mo.as_html(fig_ms)}
-
-    {arrott_summary_df.to_markdown(index=False, floatfmt=".3f")}
-    """)
-    return
-
-
-@app.cell
-def _(comparison_df, mo):
-    row_ff = comparison_df.loc[comparison_df["Method"] == "Far-field"].iloc[0]
-    row_cw = comparison_df.loc[comparison_df["Method"] == "Curie-Weiss"].iloc[0]
+def _(df_summary, mo):
+    row_ff = df_summary.loc[df_summary["Method"] == "Far-field"].iloc[0]
+    row_cw = df_summary.loc[df_summary["Method"] == "Curie-Weiss"].iloc[0]
 
     ff_good = (
         row_ff["Median chi2/dof"] < row_cw["Median chi2/dof"]
