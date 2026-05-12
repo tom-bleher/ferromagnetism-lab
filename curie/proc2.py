@@ -146,7 +146,7 @@ def _(mo):
 def _(SIGMA_Y_V, curve_fit, np):
     def sorted_channel_columns(df, prefix):
         cols = [c for c in df.columns if c.startswith(prefix)]
-        return sorted(cols, key=lambda c: int(c[len(prefix):]))
+        return sorted(cols, key=lambda c: int(c[len(prefix) :]))
 
     def _y_at_zero(x, y, sigma_y):
         x = np.asarray(x, dtype=float)
@@ -311,6 +311,7 @@ def _(SIGMA_Y_V, curve_fit, np):
             return np.nan
         # Smooth to avoid noise in derivatives
         from scipy.signal import savgol_filter
+
         M_smooth = savgol_filter(M, window_length=9, polyorder=3)
         # Find where the curve drops fastest (inflection point)
         d2M = np.gradient(np.gradient(M_smooth, T), T)
@@ -329,9 +330,9 @@ def _(SIGMA_Y_V, curve_fit, np):
         mask = np.isfinite(_T) & np.isfinite(M) & np.isfinite(sM) & (M < 0.9)
 
         if T_rough is not None:
-            mask &= (_T < T_rough - 1.5)
+            mask &= _T < T_rough - 1.5
         else:
-            mask &= (M > 0.05)
+            mask &= M > 0.05
 
         if np.sum(mask) < 8:
             mask = np.isfinite(_T) & np.isfinite(M) & np.isfinite(sM) & (M > 0.02)
@@ -345,7 +346,10 @@ def _(SIGMA_Y_V, curve_fit, np):
         def model(Tloc, Tc, A):
             return A * np.sqrt(np.clip(Tc - Tloc, 0.0, None))
 
-        p0 = [T_rough if T_rough is not None else Tc_seed, max(0.05, np.max(Mf) / np.sqrt(max(Tc_seed - np.min(Tf), 1.0)))]
+        p0 = [
+            T_rough if T_rough is not None else Tc_seed,
+            max(0.05, np.max(Mf) / np.sqrt(max(Tc_seed - np.min(Tf), 1.0))),
+        ]
         popt, pcov = curve_fit(
             model,
             Tf,
@@ -376,7 +380,9 @@ def _(SIGMA_Y_V, curve_fit, np):
             "n": int(len(Tf)),
         }
 
-    def fit_curie_weiss(T_K, chi, sigma_chi, Tc_seed=215.0, T_rough=None, cut_factor=1.25):
+    def fit_curie_weiss(
+        T_K, chi, sigma_chi, Tc_seed=215.0, T_rough=None, cut_factor=1.25
+    ):
         _T = np.asarray(T_K, dtype=float)
         chi = np.asarray(chi, dtype=float)
         schi = np.asarray(sigma_chi, dtype=float)
@@ -650,7 +656,9 @@ def _(
             {
                 "Series": name,
                 "Loops": len(_T),
-                "T range [K]": f"{np.min(_T):.1f} to {np.max(_T):.1f}" if len(_T) > 0 else "N/A",
+                "T range [K]": (
+                    f"{np.min(_T):.1f} to {np.max(_T):.1f}" if len(_T) > 0 else "N/A"
+                ),
                 "median sigma T [K]": f"{np.median(_d['sigma_T_K']):.2f}",
                 "tail points (M3)": int(np.nanmedian(_d["tail_points"])),
                 "Rough Tc [K]": f"{t_rough:.1f}" if np.isfinite(t_rough) else "N/A",
@@ -658,26 +666,40 @@ def _(
         )
 
         # Calculate summary row reactively based on slider range
-        part_a_rows.extend([
-            {
-                "Series": name,
-                "Method": "M1 @ H=0",
-                "T(M=0.5) [K]": transition_temp(_T, _d["method1_norm"]),
-                "Range(raw)": float(np.nanmax(_d["method1"]) - np.nanmin(_d["method1"])) if len(_T) > 0 else 0,
-            },
-            {
-                "Series": name,
-                "Method": "M2 saturation edges",
-                "T(M=0.5) [K]": transition_temp(_T, _d["method2_norm"]),
-                "Range(raw)": float(np.nanmax(_d["method2"]) - np.nanmin(_d["method2"])) if len(_T) > 0 else 0,
-            },
-            {
-                "Series": name,
-                "Method": "M3 tail extrapolation",
-                "T(M=0.5) [K]": transition_temp(_T, _d["method3_norm"]),
-                "Range(raw)": float(np.nanmax(_d["method3"]) - np.nanmin(_d["method3"])) if len(_T) > 0 else 0,
-            }
-        ])
+        part_a_rows.extend(
+            [
+                {
+                    "Series": name,
+                    "Method": "M1 @ H=0",
+                    "T(M=0.5) [K]": transition_temp(_T, _d["method1_norm"]),
+                    "Range(raw)": (
+                        float(np.nanmax(_d["method1"]) - np.nanmin(_d["method1"]))
+                        if len(_T) > 0
+                        else 0
+                    ),
+                },
+                {
+                    "Series": name,
+                    "Method": "M2 saturation edges",
+                    "T(M=0.5) [K]": transition_temp(_T, _d["method2_norm"]),
+                    "Range(raw)": (
+                        float(np.nanmax(_d["method2"]) - np.nanmin(_d["method2"]))
+                        if len(_T) > 0
+                        else 0
+                    ),
+                },
+                {
+                    "Series": name,
+                    "Method": "M3 tail extrapolation",
+                    "T(M=0.5) [K]": transition_temp(_T, _d["method3_norm"]),
+                    "Range(raw)": (
+                        float(np.nanmax(_d["method3"]) - np.nanmin(_d["method3"]))
+                        if len(_T) > 0
+                        else 0
+                    ),
+                },
+            ]
+        )
 
     prep_df = pd.DataFrame(prep_rows)
     part_a_summary_df = pd.DataFrame(part_a_rows)
@@ -814,7 +836,10 @@ def _(
     fit_far_field,
 ):
     # fit_results[model][series][proxy_method]
-    fit_results = {"far_field": {s: {} for s in SERIES_ORDER}, "curie_weiss": {s: {} for s in SERIES_ORDER}}
+    fit_results = {
+        "far_field": {s: {} for s in SERIES_ORDER},
+        "curie_weiss": {s: {} for s in SERIES_ORDER},
+    }
     proxy_methods = ["method1", "method2", "method3"]
 
     for _series_name in SERIES_ORDER:
@@ -875,7 +900,7 @@ def _(SERIES_ORDER, fit_results, np, pd):
 
             row["N (M1,M2,M3)"] = ", ".join(n_list)
             if vals:
-                w = 1.0 / (np.array(sigs, dtype=float)**2)
+                w = 1.0 / (np.array(sigs, dtype=float) ** 2)
                 w_mean = np.sum(w * vals) / np.sum(w)
                 w_sigma = np.sqrt(1.0 / np.sum(w))
                 row["Weighted Avg Tc [K]"] = f"{w_mean:.2f} ± {w_sigma:.2f}"
@@ -888,16 +913,13 @@ def _(SERIES_ORDER, fit_results, np, pd):
         ("far_field", "Far-field"),
         ("curie_weiss", "Curie-Weiss"),
     ]:
+
         def get_stats(series_list):
             vals, sigs, chi2s, ns = [], [], [], []
             for series in series_list:
                 for pm in proxy_keys:
                     res = fit_results[method_key][series][pm]
-                    if (
-                        res["ok"]
-                        and np.isfinite(res["sigma_Tc"])
-                        and res["sigma_Tc"] > 0
-                    ):
+                    if res["ok"] and np.isfinite(res["sigma_Tc"]) and res["sigma_Tc"] > 0:
                         vals.append(res["Tc"])
                         sigs.append(res["sigma_Tc"])
                         chi2s.append(res["chi2_red"])
@@ -916,28 +938,38 @@ def _(SERIES_ORDER, fit_results, np, pd):
         all_stats = get_stats(SERIES_ORDER)
         pref_stats = get_stats(["series A", "series B"])
 
-        summary_stats.append({
-            "Method": method_label,
-            "Scope": "All (A,B,C)",
-            "Weighted Tc [K]": all_stats[0],
-            "Weighted sigma [K]": all_stats[1],
-            "Successful Fits": int(all_stats[4]),
-            "Total Points": int(all_stats[5]),
-            "Median chi2/dof": all_stats[3]
-        })
-        summary_stats.append({
-            "Method": method_label,
-            "Scope": "Preferred (A,B)",
-            "Weighted Tc [K]": pref_stats[0],
-            "Weighted sigma [K]": pref_stats[1],
-            "Successful Fits": int(pref_stats[4]),
-            "Total Points": int(pref_stats[5]),
-            "Median chi2/dof": pref_stats[3],
-        })
+        summary_stats.append(
+            {
+                "Method": method_label,
+                "Scope": "All (A,B,C)",
+                "Weighted Tc [K]": all_stats[0],
+                "Weighted sigma [K]": all_stats[1],
+                "Successful Fits": int(all_stats[4]),
+                "Total Points": int(all_stats[5]),
+                "Median chi2/dof": all_stats[3],
+            }
+        )
+        summary_stats.append(
+            {
+                "Method": method_label,
+                "Scope": "Preferred (A,B)",
+                "Weighted Tc [K]": pref_stats[0],
+                "Weighted sigma [K]": pref_stats[1],
+                "Successful Fits": int(pref_stats[4]),
+                "Total Points": int(pref_stats[5]),
+                "Median chi2/dof": pref_stats[3],
+            }
+        )
 
     impact_rows = []
-    for model_key, model_label in [("far_field", "Far-field"), ("curie_weiss", "Curie-Weiss")]:
-        for scope_label, series_list in [("All (A,B,C)", SERIES_ORDER), ("Preferred (A,B)", ["series A", "series B"])]:
+    for model_key, model_label in [
+        ("far_field", "Far-field"),
+        ("curie_weiss", "Curie-Weiss"),
+    ]:
+        for scope_label, series_list in [
+            ("All (A,B,C)", SERIES_ORDER),
+            ("Preferred (A,B)", ["series A", "series B"]),
+        ]:
             i_row = {"Model": model_label, "Scope": scope_label}
             for pk in proxy_keys:
                 v, s, ns = [], [], []
@@ -948,7 +980,7 @@ def _(SERIES_ORDER, fit_results, np, pd):
                         s.append(res["sigma_Tc"])
                         ns.append(res["n"])
                 if v:
-                    w = 1.0 / (np.array(s, dtype=float)**2)
+                    w = 1.0 / (np.array(s, dtype=float) ** 2)
                     wm = np.sum(w * v) / np.sum(w)
                     ws = np.sqrt(1.0 / np.sum(w))
                     i_row[proxy_labels[pk]] = f"{wm:.2f} ± {ws:.2f}"
@@ -997,9 +1029,15 @@ def _(
     sliders,
 ):
     def _():
-        fig, axs = plt.subplots(2, 3, figsize=(14, 7), sharex="col", gridspec_kw={"height_ratios": [3, 1]})
+        fig, axs = plt.subplots(
+            2, 3, figsize=(14, 7), sharex="col", gridspec_kw={"height_ratios": [3, 1]}
+        )
         proxy_methods = ["method1", "method2", "method3"]
-        proxy_colors = {"method1": COLORS["m1"], "method2": COLORS["m2"], "method3": COLORS["m3"]}
+        proxy_colors = {
+            "method1": COLORS["m1"],
+            "method2": COLORS["m2"],
+            "method3": COLORS["m3"],
+        }
 
         for j, _series_name in enumerate(SERIES_ORDER):
             ax_top = axs[0, j]
@@ -1009,7 +1047,9 @@ def _(
             # Sync X-axis with sliders
             ax_top.set_xlim(sliders.value[_series_name])
             _tr = _d["Tc_rough"]
-            ax_top.axvline(_tr, color="black", linestyle="--", alpha=0.4, label="Rough Tc")
+            ax_top.axvline(
+                _tr, color="black", linestyle="--", alpha=0.4, label="Rough Tc"
+            )
             ax_top.set_title(f"{_series_name} | Far-field Fit")
 
             for pm in proxy_methods:
@@ -1017,19 +1057,35 @@ def _(
                 color = proxy_colors[pm]
 
                 if res["ok"]:
-                    Tf, yf, sf, r = res["T_fit"], res["y_fit"], res["sigma_fit"], res["residuals"]
+                    Tf, yf, sf, r = (
+                        res["T_fit"],
+                        res["y_fit"],
+                        res["sigma_fit"],
+                        res["residuals"],
+                    )
                     Tc, A = res["Tc"], res["A"]
 
                     # Plot full data in background
-                    ax_top.plot(_d["T_K"], _d[f"{pm}_norm"], "o", ms=2, color=color, alpha=0.15)
+                    ax_top.plot(
+                        _d["T_K"], _d[f"{pm}_norm"], "o", ms=2, color=color, alpha=0.15
+                    )
 
                     # Plot fit data
-                    ax_top.errorbar(Tf, yf, yerr=sf, fmt="o", ms=3, color=color, alpha=0.6)
+                    ax_top.errorbar(
+                        Tf, yf, yerr=sf, fmt="o", ms=3, color=color, alpha=0.6
+                    )
 
                     # Plot model
                     xline = np.linspace(np.min(Tf), np.max(Tf), 100)
                     yline = A * np.sqrt(np.clip(Tc - xline, 0.0, None))
-                    ax_top.plot(xline, yline, "-", color=color, lw=1.8, label=f"{pm}: Tc={Tc:.1f}K")
+                    ax_top.plot(
+                        xline,
+                        yline,
+                        "-",
+                        color=color,
+                        lw=1.8,
+                        label=f"{pm}: Tc={Tc:.1f}K",
+                    )
 
                     # Residuals
                     ax_bot.plot(Tf, r, "o", ms=2.5, color=color, alpha=0.7)
@@ -1058,9 +1114,15 @@ def _(
     sliders,
 ):
     def _():
-        fig, axs = plt.subplots(2, 3, figsize=(14, 7), sharex="col", gridspec_kw={"height_ratios": [3, 1]})
+        fig, axs = plt.subplots(
+            2, 3, figsize=(14, 7), sharex="col", gridspec_kw={"height_ratios": [3, 1]}
+        )
         proxy_methods = ["method1", "method2", "method3"]
-        proxy_colors = {"method1": COLORS["m1"], "method2": COLORS["m2"], "method3": COLORS["m3"]}
+        proxy_colors = {
+            "method1": COLORS["m1"],
+            "method2": COLORS["m2"],
+            "method3": COLORS["m3"],
+        }
 
         for j, _series_name in enumerate(SERIES_ORDER):
             ax_top = axs[0, j]
@@ -1070,7 +1132,9 @@ def _(
             # Sync X-axis with sliders
             ax_top.set_xlim(sliders.value[_series_name])
             _tr = _d["Tc_rough"]
-            ax_top.axvline(_tr, color="black", linestyle="--", alpha=0.4, label="Rough Tc")
+            ax_top.axvline(
+                _tr, color="black", linestyle="--", alpha=0.4, label="Rough Tc"
+            )
             ax_top.set_title(f"{_series_name} | Curie-Weiss Fit")
             y_max_fit = 0.0
 
@@ -1079,7 +1143,12 @@ def _(
                 color = proxy_colors[pm]
 
                 if res["ok"]:
-                    Tf, yf, sf, r = res["T_fit"], res["y_fit"], res["sigma_fit"], res["residuals"]
+                    Tf, yf, sf, r = (
+                        res["T_fit"],
+                        res["y_fit"],
+                        res["sigma_fit"],
+                        res["residuals"],
+                    )
                     Tc, C = res["Tc"], res["C"]
                     y_max_fit = max(y_max_fit, np.max(yf))
 
@@ -1088,12 +1157,21 @@ def _(
                     ax_top.plot(_d["T_K"], inv_full, "o", ms=2, color=color, alpha=0.1)
 
                     # Plot fit data
-                    ax_top.errorbar(Tf, yf, yerr=sf, fmt="o", ms=3, color=color, alpha=0.6)
+                    ax_top.errorbar(
+                        Tf, yf, yerr=sf, fmt="o", ms=3, color=color, alpha=0.6
+                    )
 
                     # Plot model
                     xline = np.linspace(np.min(Tf), np.max(Tf), 100)
                     yline = (xline - Tc) / C
-                    ax_top.plot(xline, yline, "-", color=color, lw=1.8, label=f"{pm}: Tc={Tc:.1f}K")
+                    ax_top.plot(
+                        xline,
+                        yline,
+                        "-",
+                        color=color,
+                        lw=1.8,
+                        label=f"{pm}: Tc={Tc:.1f}K",
+                    )
 
                     # Residuals
                     ax_bot.plot(Tf, r, "o", ms=2.5, color=color, alpha=0.7)
