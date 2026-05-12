@@ -524,13 +524,14 @@ def _(
         # --- DATA CLEANING (Automated Cutoffs & Outliers) ---
         # 1. Automated Cutoff: Series C is unstable before reaching its magnetic peak.
         # A and B receive a minor initial cutoff (first 4 points) to skip start-up transient.
-        if _series_name == "series C":
-            # Detect the peak on a smoothed version of M3 (the cleanest proxy)
-            m3_filled = np.nan_to_num(m3, nan=np.nanmedian(m3))
-            m3_smooth = np.convolve(m3_filled, np.ones(5) / 5, mode="same")
-            start_idx = int(np.argmax(m3_smooth))
-        else:
-            start_idx = min(4, n_loops)
+        # # if _series_name == "series C":
+        # #     # Detect the peak on a smoothed version of M3 (the cleanest proxy)
+        # #     m3_filled = np.nan_to_num(m3, nan=np.nanmedian(m3))
+        # #     m3_smooth = np.convolve(m3_filled, np.ones(5) / 5, mode="same")
+        # #     start_idx = int(np.argmax(m3_smooth))
+        # # else:
+        # #     start_idx = min(4, n_loops)
+        start_idx = 0
 
         # 2. Outlier Detection: Identify singular spikes using a rolling median
         # Basically, take a rolling windows of 7 points, compute the median, and flag points that deviate
