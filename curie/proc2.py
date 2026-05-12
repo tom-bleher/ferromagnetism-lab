@@ -881,7 +881,7 @@ def _(COLORS, SERIES_ORDER, filtered_series_data, np, plt, save_figure):
                 lw=1.3,
                 color=COLORS["m1"],
                 alpha=0.9,
-                label="Method 1: H=0 intersection",
+                label=r"Method 1: $H=0$ intersection",
             )
             mask2 = (
                 np.isfinite(_T)
@@ -920,8 +920,8 @@ def _(COLORS, SERIES_ORDER, filtered_series_data, np, plt, save_figure):
                 label="Method 3: tail extrapolation",
             )
             ax.set_title(f"{_series_name}: normalized magnetization vs temperature")
-            ax.set_xlabel("Temperature [K]")
-            ax.set_ylabel("Normalized magnetization")
+            ax.set_xlabel(r"$T$ (K)")
+            ax.set_ylabel(r"$\tilde M$")
             ax.set_ylim(-0.05, 1.05)
             ax.legend(loc="best", fontsize=8)
         fig.tight_layout()
@@ -1003,7 +1003,7 @@ def _(mo):
         stop=1.0,
         step=0.01,
         value=0.76,
-        label="Mean-field Cut Factor (T >= factor * Tc_rough)",
+        label=r"Mean-field Cut Factor ($T \geq f\cdot T_{c,\text{rough}}$)",
     )
     mf_cut_factor  # type: ignore
     return (mf_cut_factor,)
@@ -1016,7 +1016,7 @@ def _(mo):
         stop=2.0,
         step=0.01,
         value=1.15,
-        label="Curie-Weiss Cut Factor (T > factor * Tc_rough)",
+        label=r"Curie-Weiss Cut Factor ($T > f\cdot T_{c,\text{rough}}$)",
     )
     cw_cut_factor  # type: ignore
     return (cw_cut_factor,)
@@ -1273,7 +1273,7 @@ def _(
             ax_top.set_xlim(sliders.value[_series_name])
             _tr = _d["Tc_rough"]
             ax_top.axvline(
-                _tr, color="black", linestyle="--", alpha=0.4, label="Rough Tc"
+                _tr, color="black", linestyle="--", alpha=0.4, label=r"rough $T_c$"
             )
             ax_top.set_title(f"{_series_name} | Mean-field Fit")
 
@@ -1319,7 +1319,7 @@ def _(
                         "-",
                         color=color,
                         lw=1.8,
-                        label=f"{pm}: Tc={Tc:.1f}K",
+                        label=rf"{pm}: $T_c={Tc:.1f}$ K",
                     )
 
                     # Residuals in squared space
@@ -1327,11 +1327,11 @@ def _(
                     r_sq = (yf_sq - ymodel_at_Tf) / sf_sq
                     ax_bot.plot(Tf, r_sq, "o", ms=2.5, color=color, alpha=0.7)
 
-            ax_top.set_ylabel("M^2 (normalized)")
+            ax_top.set_ylabel(r"$M^2$ (normalized)")
             ax_top.legend(loc="lower left", fontsize=7)
             ax_bot.axhline(0.0, color="k", lw=0.8)
-            ax_bot.set_xlabel("Temperature [K]")
-            ax_bot.set_ylabel("res/sigma")
+            ax_bot.set_xlabel(r"$T$ (K)")
+            ax_bot.set_ylabel(r"res / $\sigma$")
 
         fig.tight_layout()
         save_figure(fig, "mean_field_fits")
@@ -1372,7 +1372,7 @@ def _(
             ax_top.set_xlim(sliders.value[_series_name])
             _tr = _d["Tc_rough"]
             ax_top.axvline(
-                _tr, color="black", linestyle="--", alpha=0.4, label="Rough Tc"
+                _tr, color="black", linestyle="--", alpha=0.4, label=r"rough $T_c$"
             )
             ax_top.set_title(f"{_series_name} | Curie-Weiss Fit")
             y_max_fit = 0.0
@@ -1413,7 +1413,7 @@ def _(
                         "-",
                         color=color,
                         lw=1.8,
-                        label=f"{pm}: Tc={Tc:.1f}K",
+                        label=rf"{pm}: $T_c={Tc:.1f}$ K",
                     )
 
                     # Residuals
@@ -1423,11 +1423,11 @@ def _(
             if y_max_fit > 0:
                 ax_top.set_ylim(-0.05 * y_max_fit, 1.5 * y_max_fit)
 
-            ax_top.set_ylabel("1/M (normalized)")
+            ax_top.set_ylabel(r"$1/M$ (normalized)")
             ax_top.legend(loc="best", fontsize=7)
             ax_bot.axhline(0.0, color="k", lw=0.8)
-            ax_bot.set_xlabel("Temperature [K]")
-            ax_bot.set_ylabel("res/sigma")
+            ax_bot.set_xlabel(r"$T$ (K)")
+            ax_bot.set_ylabel(r"res / $\sigma$")
 
         fig.tight_layout()
         save_figure(fig, "curie_weiss_fits")
