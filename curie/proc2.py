@@ -138,8 +138,15 @@ def _(mo):
       - **Series C instability**: We detect the start-up transient by locating the global maximum of magnetization (smoothed via 5-point average). Data preceding this peak is discarded to exclude non-equilibrium heating.
       - **Outlier Removal (Hampel Filter)**: Point anomalies are identified via a rolling 7-point median. If $|M_i - \text{median}| > 4.8 \times \text{MAD}$, the point is discarded as a non-physical artifact.
     - Built per-loop uncertainty arrays:
-      - \(\sigma_T\): thermometer spec + temperature-resolution + finite-time drift
-      - \(\sigma_X, \sigma_Y\): digitization uncertainty (uniform quantization model)
+      - \(\sigma_T\): thermometer spec + temperature-resolution + finite-time drift, combined as
+        $$
+          \sigma_T^2 = \sigma_{\text{abs}}^2 + \sigma_{\text{res}}^2 + \sigma_{\text{drift}}^2
+        $$
+      - \(\sigma_X, \sigma_Y\): digitization uncertainty from the ADC step size, modeled as a uniform distribution,
+        $$
+          \sigma_{X,Y} = \frac{\Delta_{X,Y}}{\sqrt{12}}
+        $$
+        where \(\Delta_{X,Y}\) is the channel quantization step.
 
     **Uncertainty scope**
     - Random/statistical uncertainties are propagated through extraction and fits.
@@ -740,6 +747,26 @@ def _(mo):
     2. **Method 2**: saturation-edge values (tips of the loop)
     3. **Method 3**: extrapolation of saturation tails to \(H=0\) using an adaptive linear fit.
 
+     **Error propagation used in Part A**
+     The three proxies are all functions of the measured loop points, so we propagate the pointwise voltage uncertainty through the extraction rule:
+    1. **Method 1** uses an interpolated zero-field value. For a linear interpolation fraction \(t\),
+        $$
+            M_1 = (1-t) y_0 + t y_1, \qquad
+            \sigma_{M_1} = \sqrt{(1-t)^2 + t^2}\,\sigma_Y
+        $$
+    2. **Method 2** averages the extreme-field window. For an average over \(n\) points,
+        $$
+            M_2 = \frac{1}{2}(\bar y_+ - \bar y_-), \qquad
+            \sigma_{M_2} = \frac{1}{2}\sqrt{\sigma_+^2 + \sigma_-^2}
+        $$
+         with each window uncertainty estimated from the sample spread and digitization term.
+    3. **Method 3** fits a line to the tail region and extrapolates to zero field. If the tail fit is \(y = a x + b\), the magnetization proxy is set by the intercepts,
+        $$
+            M_3 = \frac{1}{2}(b_+ - b_-), \qquad
+            \sigma_{M_3} = \frac{1}{2}\sqrt{\sigma_{b_+}^2 + \sigma_{b_-}^2}
+        $$
+    where each \(\sigma_b\) comes from the weighted line fit covariance.
+
     **Extraction Logic for Method 3**:
     The linear "tail" of the saturation region is identified by an algorithm that starts at the extreme field tips and grows the fitting window inward. It stops when the RMS of the residuals increases by more than $25\%$ or exceeds $2.2\sigma$. This ensures the extrapolated zero-field magnetization proxy is derived from a strictly linear saturation regime.
     """)
@@ -812,6 +839,25 @@ def _(mo):
     Two fitting methods are applied to each series:
     1. **Mean-field (mean-field near transition):** \(M(T)=A\sqrt{T_C-T}\)
     2. **Curie-Weiss:** \(1/\chi(T)=(T-T_C)/C\)
+
+    **Error propagation used in Part B**
+    The fit inputs are the normalized proxies from Part A, so their uncertainties carry forward directly.
+    For the mean-field fit we linearize the model by squaring it for display:
+    $$
+    M^2(T) = A^2 (T_C - T)
+    $$
+    and propagate the uncertainty with the usual derivative rule,
+    $$
+    \sigma_{M^2} = \left|\frac{d(M^2)}{dM}\right|\sigma_M = 2|M|\,\sigma_M
+    $$
+    so the plotted residuals are measured in the same squared space as the fit.
+
+    For Curie-Weiss, the plotted quantity is the reciprocal proxy, so
+    $$
+    \frac{1}{\chi} = M^{-1}, \qquad
+    \sigma_{1/\chi} = \left|\frac{d(M^{-1})}{dM}\right|\sigma_M = \frac{\sigma_M}{M^2}
+    $$
+    with a small numerical floor used in the code to avoid division by zero when \(M\) is very small.
 
     **Rough $T_c$ Estimate**
     Before performing non-linear fits, we calculate a model-independent "Rough $T_c$" to automate regime selection. The process involves:
