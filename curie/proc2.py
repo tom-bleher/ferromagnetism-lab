@@ -314,19 +314,31 @@ def _(SIGMA_Y_V, curve_fit, np):
         return a, sa
 
     def transition_temp(Tvals, Mvals):
-        if len(Tvals) == 0:
+        Tvals = np.asarray(Tvals, dtype=float)
+        Mvals = np.asarray(Mvals, dtype=float)
+        mask = np.isfinite(Tvals) & np.isfinite(Mvals)
+        if not np.any(mask):
             return np.nan
-        idx = int(np.nanargmin(np.abs(Mvals - 0.5)))
-        return float(Tvals[idx])
+        idx = int(np.nanargmin(np.abs(Mvals[mask] - 0.5)))
+        return float(Tvals[mask][idx])
 
     def estimate_rough_tc(T, M):
         """Estimate Tc using the peak of the second derivative of M(T)."""
-        if len(T) < 10:
+        T = np.asarray(T, dtype=float)
+        M = np.asarray(M, dtype=float)
+        mask = np.isfinite(T) & np.isfinite(M)
+        T = T[mask]
+        M = M[mask]
+        if len(T) < 5:
             return np.nan
         # Smooth to avoid noise in derivatives
         from scipy.signal import savgol_filter
 
-        M_smooth = savgol_filter(M, window_length=9, polyorder=3)
+        window_length = min(9, len(M) if len(M) % 2 == 1 else len(M) - 1)
+        if window_length < 5:
+            return np.nan
+        polyorder = min(3, window_length - 1)
+        M_smooth = savgol_filter(M, window_length=window_length, polyorder=polyorder)
         # Find where the curve drops fastest (inflection point)
         d2M = np.gradient(np.gradient(M_smooth, T), T)
         # The peak of the second derivative happens as it curves into the tail
@@ -540,18 +552,23 @@ def _(
         # #     start_idx = min(4, n_loops)
         start_idx = 0
 
-        # 2. Outlier Detection: Identify singular spikes using a rolling median
-        # Basically, take a rolling windows of 7 points, compute the median, and flag points that deviate
-        # from that median by more than ~4.5 times the median absolute deviation as outliers.
-        m3_ser = pd.Series(m3)
-        m3_med = m3_ser.rolling(window=7, center=True).median().ffill().bfill().to_numpy()
-        m3_resid = np.abs(m3 - m3_med)
-        m3_mad = np.nanmedian(m3_resid)
-        # Threshold for 'singular points that are anomalies' (approx 4.5 sigma equivalent)
-        is_outlier = m3_resid > (4.8 * max(m3_mad, 1e-6))
+        # 2. Outlier Detection: Identify singular spikes using a rolling median + MAD (Hampel-style)
+        # Apply the same logic to all three method series (M1, M2, M3) and combine flags.
+        def _rolling_mad_outlier(values, window=7, thresh=4.8):
+            v = np.asarray(values, dtype=float)
+            ser = pd.Series(v)
+            med = ser.rolling(window=window, center=True).median().ffill().bfill().to_numpy()
+            resid = np.abs(v - med)
+            mad = np.nanmedian(resid)
+            return resid > (thresh * max(mad, 1e-6))
 
-        # Apply Cleaning Mask to all local variables before saving to dictionary
-        valid_points = (np.arange(n_loops) >= start_idx) & (~is_outlier)
+        is_outlier_m1 = _rolling_mad_outlier(m1)
+        is_outlier_m2 = _rolling_mad_outlier(m2)
+        is_outlier_m3 = _rolling_mad_outlier(m3)
+
+        # Keep the shared loop axis intact; only blank out the method values that fail
+        # their own Hampel-style test so one proxy cannot suppress the others.
+        valid_points = np.arange(n_loops) >= start_idx
 
         T_C, T_K = T_C[valid_points], T_K[valid_points]
         time_s, sigma_T = time_s[valid_points], sigma_T[valid_points]
@@ -562,6 +579,17 @@ def _(
         m3, s3 = m3[valid_points], s3[valid_points]
         chi0, schi0 = chi0[valid_points], schi0[valid_points]
         tail_points = tail_points[valid_points]
+
+        is_outlier_m1 = is_outlier_m1[valid_points]
+        is_outlier_m2 = is_outlier_m2[valid_points]
+        is_outlier_m3 = is_outlier_m3[valid_points]
+
+        m1[is_outlier_m1] = np.nan
+        s1[is_outlier_m1] = np.nan
+        m2[is_outlier_m2] = np.nan
+        s2[is_outlier_m2] = np.nan
+        m3[is_outlier_m3] = np.nan
+        s3[is_outlier_m3] = np.nan
 
         # Normalize the cleaned data
         m1_norm, s1_norm = normalize_with_uncertainty(m1, s1)
@@ -774,18 +802,19 @@ def _(mo):
 
 
 @app.cell
-def _(COLORS, SERIES_ORDER, filtered_series_data, plt, save_figure):
+def _(COLORS, SERIES_ORDER, filtered_series_data, np, plt, save_figure):
     def _():
         fig, axs = plt.subplots(nrows=3, ncols=1, figsize=(8, 12))
         for _i, _series_name in enumerate(SERIES_ORDER):
             _d = filtered_series_data[_series_name]
             _T = _d["T_K"]
             ax = axs[_i]
+            mask1 = np.isfinite(_T) & np.isfinite(_d["method1_norm"]) & np.isfinite(_d["method1_sigma_norm"]) & np.isfinite(_d["sigma_T_K"])
             ax.errorbar(
-                _T,
-                _d["method1_norm"],
-                xerr=_d["sigma_T_K"],
-                yerr=_d["method1_sigma_norm"],
+                _T[mask1],
+                _d["method1_norm"][mask1],
+                xerr=_d["sigma_T_K"][mask1],
+                yerr=_d["method1_sigma_norm"][mask1],
                 fmt="o-",
                 ms=3.5,
                 lw=1.3,
@@ -793,11 +822,12 @@ def _(COLORS, SERIES_ORDER, filtered_series_data, plt, save_figure):
                 alpha=0.9,
                 label="Method 1: H=0 intersection",
             )
+            mask2 = np.isfinite(_T) & np.isfinite(_d["method2_norm"]) & np.isfinite(_d["method2_sigma_norm"]) & np.isfinite(_d["sigma_T_K"])
             ax.errorbar(
-                _T,
-                _d["method2_norm"],
-                xerr=_d["sigma_T_K"],
-                yerr=_d["method2_sigma_norm"],
+                _T[mask2],
+                _d["method2_norm"][mask2],
+                xerr=_d["sigma_T_K"][mask2],
+                yerr=_d["method2_sigma_norm"][mask2],
                 fmt="s-",
                 ms=3.2,
                 lw=1.3,
@@ -805,11 +835,12 @@ def _(COLORS, SERIES_ORDER, filtered_series_data, plt, save_figure):
                 alpha=0.9,
                 label="Method 2: saturation edges",
             )
+            mask3 = np.isfinite(_T) & np.isfinite(_d["method3_norm"]) & np.isfinite(_d["method3_sigma_norm"]) & np.isfinite(_d["sigma_T_K"])
             ax.errorbar(
-                _T,
-                _d["method3_norm"],
-                xerr=_d["sigma_T_K"],
-                yerr=_d["method3_sigma_norm"],
+                _T[mask3],
+                _d["method3_norm"][mask3],
+                xerr=_d["sigma_T_K"][mask3],
+                yerr=_d["method3_sigma_norm"][mask3],
                 fmt="^-",
                 ms=3.5,
                 lw=1.3,
@@ -1132,8 +1163,14 @@ def _(
                     Tc, A = res["Tc"], res["A"]
 
                     # Plot full data in background but show M^2 (normalized)
+                    mask_full = np.isfinite(_d["T_K"]) & np.isfinite(_d[f"{pm}_norm"])
                     ax_top.plot(
-                        _d["T_K"], _d[f"{pm}_norm"] ** 2, "o", ms=2, color=color, alpha=0.15
+                        _d["T_K"][mask_full],
+                        _d[f"{pm}_norm"][mask_full] ** 2,
+                        "o",
+                        ms=2,
+                        color=color,
+                        alpha=0.15,
                     )
 
                     # Prepare squared fit-values and propagate uncertainties: sigma(M^2)=2*|M|*sigma_M
@@ -1228,8 +1265,9 @@ def _(
                     y_max_fit = max(y_max_fit, np.max(yf))
 
                     # Plot full inverse data in background
-                    inv_full = 1.0 / np.maximum(_d[f"{pm}_norm"], 1e-12)
-                    ax_top.plot(_d["T_K"], inv_full, "o", ms=2, color=color, alpha=0.1)
+                    mask_full = np.isfinite(_d["T_K"]) & np.isfinite(_d[f"{pm}_norm"])
+                    inv_full = 1.0 / np.maximum(_d[f"{pm}_norm"][mask_full], 1e-12)
+                    ax_top.plot(_d["T_K"][mask_full], inv_full, "o", ms=2, color=color, alpha=0.1)
 
                     # Plot fit data
                     ax_top.errorbar(
