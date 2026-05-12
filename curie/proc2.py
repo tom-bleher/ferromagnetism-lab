@@ -15,7 +15,7 @@ def _():
 
 
 @app.cell(hide_code=True)
-def _(mo):
+def _(SIGMA_T_RES_K, SIGMA_Y_V, mo):
     mo.md(r"""
     # Curie temperature analysis (clean notebook)
 
@@ -37,7 +37,12 @@ def _(mo):
     - \(H\): external field proxy (oscilloscope X channel, volts)
     - \(B\): total field proxy (oscilloscope Y channel, volts)
     - \(M\): magnetization proxy extracted from hysteresis geometry
-    """)
+
+    **Calculated constants used in the notebook**
+    - Channel digitization uncertainty: $\sigma_X = \sigma_Y = {SIGMA_Y_V:.6e}$ V
+    - Temperature readout resolution term: $\sigma_{T,\mathrm{res}} = {SIGMA_T_RES_K:.6e}$ K
+    - The drift term is computed pointwise from the local ramp rate, so it has no single global value.
+    """.replace("{SIGMA_Y_V:.6e}", f"{SIGMA_Y_V:.6e}").replace("{SIGMA_T_RES_K:.6e}", f"{SIGMA_T_RES_K:.6e}"))
     return
 
 
@@ -117,6 +122,7 @@ def _(ROOT, np):
     return (
         SERIES_FILES,
         SERIES_ORDER,
+        SIGMA_T_RES_K,
         SIGMA_Y_V,
         normalize_with_uncertainty,
         temperature_uncertainty_k,
@@ -124,8 +130,8 @@ def _(ROOT, np):
 
 
 @app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
+def _(SIGMA_Y_V, mo):
+    _content = r"""
     ## Setup details and preprocessing
 
     **Data preparation done here**
@@ -139,9 +145,14 @@ def _(mo):
       - **Outlier Removal (Hampel Filter)**: Point anomalies are identified via a rolling 7-point median. If $|M_i - \text{median}| > 4.8 \times \text{MAD}$, the point is discarded as a non-physical artifact.
     - Built per-loop uncertainty arrays:
       - \(\sigma_T\): thermometer spec + temperature-resolution + finite-time drift, combined as
-        $$
-          \sigma_T^2 = \sigma_{\text{abs}}^2 + \sigma_{\text{res}}^2 + \sigma_{\text{drift}}^2
-        $$
+            $$
+                \sigma_T^2 = \sigma_{\text{abs}}^2 + \sigma_{\text{res}}^2 + \sigma_{\text{drift}}^2
+            $$
+            where the drift term is defined by the local temperature ramp rate,
+            $$
+                \sigma_{\text{drift}} = \left|\frac{dT}{dt}\right|\frac{\Delta t}{\sqrt{12}}
+            $$
+            with $\Delta t$ taken as the median sample spacing.
       - \(\sigma_X, \sigma_Y\): digitization uncertainty from the ADC step size, modeled as a uniform distribution,
         $$
           \sigma_{X,Y} = \frac{\Delta_{X,Y}}{\sqrt{12}}
@@ -152,7 +163,13 @@ def _(mo):
     - Random/statistical uncertainties are propagated through extraction and fits.
     - Hardware calibration systematics (component tolerances) are not provided in the guide;
       therefore they are not included in the numeric propagation below.
-    """)
+
+    **Calculated constants used in the notebook**
+    - $\sigma_X = \sigma_Y = {SIGMA_Y_V:.6e}$ V
+    - The temperature-resolution term used in the square-root sum is $\sigma_{T,\mathrm{res}} = 2.886751\times10^{-4}$ K
+    - The series-wide cleanup thresholds are still method-specific, so one method's outlier does not force the others to drop the same point.
+    """.replace("{SIGMA_Y_V:.6e}", f"{SIGMA_Y_V:.6e}")
+    mo.md(_content)
     return
 
 
@@ -764,7 +781,7 @@ def _(
     prep_df = pd.DataFrame(prep_rows)
     part_a_summary_df = pd.DataFrame(part_a_rows)
 
-    mo.md(f"""
+    mo.md(fr"""
     **Setup summary**
 
     {prep_df.to_markdown(index=False)}
@@ -777,8 +794,8 @@ def _(
 
 
 @app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
+def _(SIGMA_Y_V, mo):
+    _content = r"""
     ## Part A — Magnetization curves from three extraction methods
 
     For each measurement series (A, B, C), one graph is shown with all three normalized \(M(T)\) curves:
@@ -806,9 +823,22 @@ def _(mo):
         $$
     where each \(\sigma_b\) comes from the weighted line fit covariance.
 
+    The same pointwise channel uncertainty is used throughout Part A, so the actual digitization scale in the code is
+    $$
+        \sigma_X = \sigma_Y = {SIGMA_Y_V:.6e}\ \mathrm{{V}}
+    $$
+    and any additional numerical spread in the extracted proxies comes from the measured loop points themselves, not from a hidden extra noise model.
+
     **Extraction Logic for Method 3**:
     The linear "tail" of the saturation region is identified by an algorithm that starts at the extreme field tips and grows the fitting window inward. It stops when the RMS of the residuals increases by more than $25\%$ or exceeds $2.2\sigma$. This ensures the extrapolated zero-field magnetization proxy is derived from a strictly linear saturation regime.
-    """)
+
+    **Calculated values used in the code**
+    - Tail fit starts from `min_points = 5` per side.
+    - Tail window growth is capped at `max_fraction = 0.35` of the loop.
+    - The adaptive stop rule uses `residual_sigma_max = 2.2` and `residual_growth = 0.25`.
+    - The shared loop-point uncertainty is still $\sigma_Y = {SIGMA_Y_V:.6e}$ V.
+    """.replace("{SIGMA_Y_V:.6e}", f"{SIGMA_Y_V:.6e}")
+    mo.md(_content)
     return
 
 
@@ -874,7 +904,7 @@ def _(COLORS, SERIES_ORDER, filtered_series_data, np, plt, save_figure):
 
 
 @app.cell(hide_code=True)
-def _(mo):
+def _(SIGMA_T_RES_K, mo):
     mo.md(r"""
     ## Part B — Curie temperature extraction
 
@@ -901,6 +931,16 @@ def _(mo):
     $$
     with a small numerical floor used in the code to avoid division by zero when \(M\) is very small.
 
+    The temperature uncertainty used by the fit preprocessing is still the quadrature sum
+    $$
+        \sigma_T^2 = \sigma_{\text{abs}}^2 + \sigma_{\text{res}}^2 + \sigma_{\text{drift}}^2
+    $$
+    with the fixed resolution contribution
+    $$
+        \sigma_{T,\mathrm{res}} = {SIGMA_T_RES_K:.6e}\ \mathrm{{K}}.
+    $$
+    For the fit regions themselves, the actual code thresholds are `mf_cut_factor = 0.75` and `cw_cut_factor = 1.25`.
+
     **Rough $T_c$ Estimate**
     Before performing non-linear fits, we calculate a model-independent "Rough $T_c$" to automate regime selection. The process involves:
     1. **Smoothing**: Magnetization data ($M_3$) is smoothed using a Savitzky-Golay filter (window length 9, polynomial order 3) to suppress numerical noise.
@@ -916,7 +956,13 @@ def _(mo):
 
     The plots below show the full slider-filtered range in light gray for context.
     Fits are now performed on all three extraction methods (M1, M2, M3) to allow for consistency cross-checks.
-    """)
+
+    **Calculated values used in the notebook**
+    - Mean-field lower cutoff factor: `0.75`
+    - Curie-Weiss lower cutoff factor: `1.25`
+    - Temperature-resolution floor: $\sigma_{T,\mathrm{res}} = {SIGMA_T_RES_K:.6e}$ K
+    - The mean-field and Curie-Weiss point selections are data-dependent after these fixed thresholds are applied, so the fitted point counts are reported separately in the results table.
+    """.replace("{SIGMA_T_RES_K:.6e}", f"{SIGMA_T_RES_K:.6e}"))
     return
 
 
@@ -1127,7 +1173,7 @@ def _(SERIES_ORDER, fit_results, np, pd):
 
 @app.cell
 def _(df_fit_table, df_method_impact, df_summary, mo):
-    mo.md(f"""
+    mo.md(fr"""
     ### Curie Temperature Results Table
     This table shows $T_c$ estimates for each model and series, computed across all three magnetization extraction methods (M1, M2, M3).
     The **N (M1,M2,M3)** column indicates the number of points used in each respective proxy fit.
@@ -1356,7 +1402,7 @@ def _(df_summary, mo):
     best = "Mean-field" if ff_good else "Curie-Weiss"
     best_row = row_ff if ff_good else row_cw
 
-    mo.md(f"""
+    mo.md(fr"""
     ## Bottom line
 
     - Preferred method for final report: **{best}**
