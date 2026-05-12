@@ -373,7 +373,7 @@ def _(SIGMA_Y_V, curve_fit, np):
         # Physical Bounds:
         # 1. M < 0.9: Exclude low-T saturation where MF law fails.
         # 2. T >= cut_factor * Tc_rough: Exclude the deep low-T region below the transition window.
-        mask = np.isfinite(_T) & np.isfinite(M) & np.isfinite(sM) & (M < 0.9)
+        mask = np.isfinite(_T) & np.isfinite(M) & np.isfinite(sM) & (M < 0.975)
 
         Tc_ref = T_rough if T_rough is not None else Tc_seed
         T_cut = cut_factor * Tc_ref
@@ -438,7 +438,7 @@ def _(SIGMA_Y_V, curve_fit, np):
         }
 
     def fit_curie_weiss(
-        T_K, sigma_T, chi, sigma_chi, Tc_seed=215.0, T_rough=None, cut_factor=1.25
+        T_K, sigma_T, chi, sigma_chi, Tc_seed=215.0, T_rough=None, cut_factor=1.15
     ):
         _T = np.asarray(T_K, dtype=float)
         _sT = np.asarray(sigma_T, dtype=float)
@@ -458,8 +458,6 @@ def _(SIGMA_Y_V, curve_fit, np):
         cut = cut_factor * (T_rough if T_rough is not None else Tc_seed)
 
         fit_mask = mask & (_T >= cut)
-        if np.sum(fit_mask) < 6:
-            fit_mask = mask & (_T >= np.quantile(_T[mask], 0.60))
         if np.sum(fit_mask) < 6:
             return {"ok": False, "reason": "insufficient high-T points"}
 
@@ -845,11 +843,17 @@ def _(SIGMA_Y_V, mo):
 @app.cell
 def _(COLORS, SERIES_ORDER, filtered_series_data, np, plt, save_figure):
     def _():
-        fig, axs = plt.subplots(nrows=3, ncols=1, figsize=(8, 12))
+        fig = plt.figure(figsize=(12, 6.8))
+        gs = fig.add_gridspec(2, 2, width_ratios=[1.45, 1.0], wspace=0.28, hspace=0.28)
+        axes = [
+            fig.add_subplot(gs[:, 0]),
+            fig.add_subplot(gs[0, 1]),
+            fig.add_subplot(gs[1, 1]),
+        ]
         for _i, _series_name in enumerate(SERIES_ORDER):
             _d = filtered_series_data[_series_name]
             _T = _d["T_K"]
-            ax = axs[_i]
+            ax = axes[_i]
             mask1 = np.isfinite(_T) & np.isfinite(_d["method1_norm"]) & np.isfinite(_d["method1_sigma_norm"]) & np.isfinite(_d["sigma_T_K"])
             ax.errorbar(
                 _T[mask1],
@@ -939,7 +943,7 @@ def _(SIGMA_T_RES_K, mo):
     $$
         \sigma_{T,\mathrm{res}} = {SIGMA_T_RES_K:.6e}\ \mathrm{{K}}.
     $$
-    For the fit regions themselves, the actual code thresholds are `mf_cut_factor = 0.75` and `cw_cut_factor = 1.25`.
+    For the fit regions themselves, the actual code thresholds are `mf_cut_factor = 0.75` and `cw_cut_factor = 1.15`.
 
     **Rough $T_c$ Estimate**
     Before performing non-linear fits, we calculate a model-independent "Rough $T_c$" to automate regime selection. The process involves:
@@ -952,14 +956,14 @@ def _(SIGMA_T_RES_K, mo):
     **Regime Selection (Data Cutting)**
     The physical models are only valid in specific temperature regimes. To ensure robust fits, points outside these regimes are automatically masked:
     - **Mean-field**: Only uses points above a lower cutoff (default \(0.75\,T_{c,\text{rough}}\)) and below the finite-field upper guard to avoid deep low-T saturation and smearing near \(T_c\).
-    - **Curie-Weiss**: Only uses points far away from the transition (\(T > \text{factor} \times T_{c,\text{rough}}\)) to ensure the system is purely in the paramagnetic state. This factor is controlled via an interactive slider and defaults to 1.25.
+    - **Curie-Weiss**: Only uses points far away from the transition (\(T > \text{factor} \times T_{c,\text{rough}}\)) to ensure the system is purely in the paramagnetic state. This factor is controlled via an interactive slider and defaults to 1.15.
 
     The plots below show the full slider-filtered range in light gray for context.
     Fits are now performed on all three extraction methods (M1, M2, M3) to allow for consistency cross-checks.
 
     **Calculated values used in the notebook**
     - Mean-field lower cutoff factor: `0.75`
-    - Curie-Weiss lower cutoff factor: `1.25`
+    - Curie-Weiss lower cutoff factor: `1.15`
     - Temperature-resolution floor: $\sigma_{T,\mathrm{res}} = {SIGMA_T_RES_K:.6e}$ K
     - The mean-field and Curie-Weiss point selections are data-dependent after these fixed thresholds are applied, so the fitted point counts are reported separately in the results table.
     """.replace("{SIGMA_T_RES_K:.6e}", f"{SIGMA_T_RES_K:.6e}"))
@@ -985,7 +989,7 @@ def _(mo):
         start=1.0,
         stop=2.0,
         step=0.01,
-        value=1.25,
+        value=1.15,
         label="Curie-Weiss Cut Factor (T > factor * Tc_rough)",
     )
     cw_cut_factor  # type: ignore
