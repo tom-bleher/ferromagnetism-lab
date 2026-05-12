@@ -16,7 +16,8 @@ def _():
 
 @app.cell(hide_code=True)
 def _(SIGMA_T_RES_K, SIGMA_Y_V, mo):
-    mo.md(r"""
+    mo.md(
+        r"""
     # Curie temperature analysis (clean notebook)
 
     This notebook rebuilds the Curie analysis from scratch with a clean, reproducible pipeline.
@@ -42,7 +43,10 @@ def _(SIGMA_T_RES_K, SIGMA_Y_V, mo):
     - Channel digitization uncertainty: $\sigma_X = \sigma_Y = {SIGMA_Y_V:.6e}$ V
     - Temperature readout resolution term: $\sigma_{T,\mathrm{res}} = {SIGMA_T_RES_K:.6e}$ K
     - The drift term is computed pointwise from the local ramp rate, so it has no single global value.
-    """.replace("{SIGMA_Y_V:.6e}", f"{SIGMA_Y_V:.6e}").replace("{SIGMA_T_RES_K:.6e}", f"{SIGMA_T_RES_K:.6e}"))
+    """.replace("{SIGMA_Y_V:.6e}", f"{SIGMA_Y_V:.6e}").replace(
+            "{SIGMA_T_RES_K:.6e}", f"{SIGMA_T_RES_K:.6e}"
+        )
+    )
     return
 
 
@@ -54,6 +58,7 @@ def _():
     import numpy as np
     import pandas as pd
     from scipy.optimize import curve_fit
+    from scipy.stats import chi2 as chi2_dist
 
     plt.rcParams.update(
         {
@@ -80,7 +85,7 @@ def _():
     def save_figure(fig, stem):
         fig.savefig(FIG_DIR / f"{stem}.pdf", bbox_inches="tight", dpi=600)
 
-    return COLORS, ROOT, curve_fit, np, pd, plt, save_figure
+    return COLORS, ROOT, chi2_dist, curve_fit, np, pd, plt, save_figure
 
 
 @app.cell
@@ -583,7 +588,13 @@ def _(
         def _rolling_mad_outlier(values, window=7, thresh=4.8):
             v = np.asarray(values, dtype=float)
             ser = pd.Series(v)
-            med = ser.rolling(window=window, center=True).median().ffill().bfill().to_numpy()
+            med = (
+                ser.rolling(window=window, center=True)
+                .median()
+                .ffill()
+                .bfill()
+                .to_numpy()
+            )
             resid = np.abs(v - med)
             mad = np.nanmedian(resid)
             return resid > (thresh * max(mad, 1e-6))
@@ -779,7 +790,7 @@ def _(
     prep_df = pd.DataFrame(prep_rows)
     part_a_summary_df = pd.DataFrame(part_a_rows)
 
-    mo.md(fr"""
+    mo.md(rf"""
     **Setup summary**
 
     {prep_df.to_markdown(index=False)}
@@ -854,7 +865,12 @@ def _(COLORS, SERIES_ORDER, filtered_series_data, np, plt, save_figure):
             _d = filtered_series_data[_series_name]
             _T = _d["T_K"]
             ax = axes[_i]
-            mask1 = np.isfinite(_T) & np.isfinite(_d["method1_norm"]) & np.isfinite(_d["method1_sigma_norm"]) & np.isfinite(_d["sigma_T_K"])
+            mask1 = (
+                np.isfinite(_T)
+                & np.isfinite(_d["method1_norm"])
+                & np.isfinite(_d["method1_sigma_norm"])
+                & np.isfinite(_d["sigma_T_K"])
+            )
             ax.errorbar(
                 _T[mask1],
                 _d["method1_norm"][mask1],
@@ -867,7 +883,12 @@ def _(COLORS, SERIES_ORDER, filtered_series_data, np, plt, save_figure):
                 alpha=0.9,
                 label="Method 1: H=0 intersection",
             )
-            mask2 = np.isfinite(_T) & np.isfinite(_d["method2_norm"]) & np.isfinite(_d["method2_sigma_norm"]) & np.isfinite(_d["sigma_T_K"])
+            mask2 = (
+                np.isfinite(_T)
+                & np.isfinite(_d["method2_norm"])
+                & np.isfinite(_d["method2_sigma_norm"])
+                & np.isfinite(_d["sigma_T_K"])
+            )
             ax.errorbar(
                 _T[mask2],
                 _d["method2_norm"][mask2],
@@ -880,7 +901,12 @@ def _(COLORS, SERIES_ORDER, filtered_series_data, np, plt, save_figure):
                 alpha=0.9,
                 label="Method 2: saturation edges",
             )
-            mask3 = np.isfinite(_T) & np.isfinite(_d["method3_norm"]) & np.isfinite(_d["method3_sigma_norm"]) & np.isfinite(_d["sigma_T_K"])
+            mask3 = (
+                np.isfinite(_T)
+                & np.isfinite(_d["method3_norm"])
+                & np.isfinite(_d["method3_sigma_norm"])
+                & np.isfinite(_d["sigma_T_K"])
+            )
             ax.errorbar(
                 _T[mask3],
                 _d["method3_norm"][mask3],
@@ -976,7 +1002,7 @@ def _(mo):
         start=0.5,
         stop=1.0,
         step=0.01,
-        value=0.75,
+        value=0.76,
         label="Mean-field Cut Factor (T >= factor * Tc_rough)",
     )
     mf_cut_factor  # type: ignore
@@ -1048,7 +1074,7 @@ def _(
 
 
 @app.cell
-def _(SERIES_ORDER, fit_results, np, pd):
+def _(SERIES_ORDER, chi2_dist, fit_results, np, pd):
     proxy_keys = ["method1", "method2", "method3"]
     proxy_labels = {
         "method1": "M1 (Inter.)",
@@ -1094,7 +1120,7 @@ def _(SERIES_ORDER, fit_results, np, pd):
     ]:
 
         def get_stats(series_list):
-            vals, sigs, chi2s, ns = [], [], [], []
+            vals, sigs, chi2s, pvals, ns = [], [], [], [], []
             for series in series_list:
                 for pm in proxy_keys:
                     res = fit_results[method_key][series][pm]
@@ -1102,17 +1128,29 @@ def _(SERIES_ORDER, fit_results, np, pd):
                         vals.append(res["Tc"])
                         sigs.append(res["sigma_Tc"])
                         chi2s.append(res["chi2_red"])
+                        dof = max(int(res["n"]) - 2, 1)
+                        pvals.append(float(chi2_dist.sf(res["chi2_red"] * dof, dof)))
                         ns.append(res["n"])
 
             if not vals:
-                return [np.nan] * 4 + [0, 0]
+                return [np.nan] * 5 + [0, 0]
 
             vals, sigs = np.array(vals), np.array(sigs)
             w = 1.0 / (sigs**2)
             w_mean = np.sum(w * vals) / np.sum(w)
             w_sigma = np.sqrt(1.0 / np.sum(w))
             std_dev = np.std(vals, ddof=1) if len(vals) > 1 else 0.0
-            return [w_mean, w_sigma, std_dev, np.median(chi2s), len(vals), sum(ns)]
+            return [
+                w_mean,
+                w_sigma,
+                std_dev,
+                np.median(chi2s),
+                np.mean(chi2s),
+                np.median(pvals),
+                np.mean(pvals),
+                len(vals),
+                sum(ns),
+            ]
 
         all_stats = get_stats(SERIES_ORDER)
         pref_stats = get_stats(["series A", "series B"])
@@ -1123,9 +1161,12 @@ def _(SERIES_ORDER, fit_results, np, pd):
                 "Scope": "All (A,B,C)",
                 "Weighted Tc [K]": all_stats[0],
                 "Weighted sigma [K]": all_stats[1],
-                "Successful Fits": int(all_stats[4]),
-                "Total Points": int(all_stats[5]),
+                "Successful Fits": int(all_stats[7]),
+                "Total Points": int(all_stats[8]),
                 "Median chi2/dof": all_stats[3],
+                "Mean chi2/dof": all_stats[4],
+                "Median P-value": all_stats[5],
+                "Mean P-value": all_stats[6],
             }
         )
         summary_stats.append(
@@ -1134,9 +1175,12 @@ def _(SERIES_ORDER, fit_results, np, pd):
                 "Scope": "Preferred (A,B)",
                 "Weighted Tc [K]": pref_stats[0],
                 "Weighted sigma [K]": pref_stats[1],
-                "Successful Fits": int(pref_stats[4]),
-                "Total Points": int(pref_stats[5]),
+                "Successful Fits": int(pref_stats[7]),
+                "Total Points": int(pref_stats[8]),
                 "Median chi2/dof": pref_stats[3],
+                "Mean chi2/dof": pref_stats[4],
+                "Median P-value": pref_stats[5],
+                "Mean P-value": pref_stats[6],
             }
         )
 
@@ -1177,7 +1221,7 @@ def _(SERIES_ORDER, fit_results, np, pd):
 
 @app.cell
 def _(df_fit_table, df_method_impact, df_summary, mo):
-    mo.md(fr"""
+    mo.md(rf"""
     ### Curie Temperature Results Table
     This table shows $T_c$ estimates for each model and series, computed across all three magnetization extraction methods (M1, M2, M3).
     The **N (M1,M2,M3)** column indicates the number of points used in each respective proxy fit.
@@ -1186,6 +1230,7 @@ def _(df_fit_table, df_method_impact, df_summary, mo):
 
     ### Overall Method comparison and Series C impact
     "Successful Fits" counts successful models across all proxies and series; "Total Points" is the aggregate number of data points fitted.
+    The summary table now includes both median and mean chi-square diagnostics, plus matching p-values computed from the same fit ensemble.
 
     {df_summary.to_markdown(index=False, floatfmt=".3f")}
 
@@ -1257,7 +1302,7 @@ def _(
                     )
 
                     # Prepare squared fit-values and propagate uncertainties: sigma(M^2)=2*|M|*sigma_M
-                    yf_sq = yf ** 2
+                    yf_sq = yf**2
                     sf_sq = np.maximum(1e-12, 2.0 * np.abs(yf) * sf)
 
                     # Plot fit data in squared space
@@ -1267,7 +1312,7 @@ def _(
 
                     # Plot model in squared space: (A*sqrt(Tc - T))^2 = A^2 * (Tc - T)
                     xline = np.linspace(np.min(Tf), np.max(Tf), 100)
-                    yline = (A ** 2) * np.clip(Tc - xline, 0.0, None)
+                    yline = (A**2) * np.clip(Tc - xline, 0.0, None)
                     ax_top.plot(
                         xline,
                         yline,
@@ -1278,7 +1323,7 @@ def _(
                     )
 
                     # Residuals in squared space
-                    ymodel_at_Tf = (A ** 2) * np.clip(Tc - Tf, 0.0, None)
+                    ymodel_at_Tf = (A**2) * np.clip(Tc - Tf, 0.0, None)
                     r_sq = (yf_sq - ymodel_at_Tf) / sf_sq
                     ax_bot.plot(Tf, r_sq, "o", ms=2.5, color=color, alpha=0.7)
 
@@ -1350,7 +1395,9 @@ def _(
                     # Plot full inverse data in background
                     mask_full = np.isfinite(_d["T_K"]) & np.isfinite(_d[f"{pm}_norm"])
                     inv_full = 1.0 / np.maximum(_d[f"{pm}_norm"][mask_full], 1e-12)
-                    ax_top.plot(_d["T_K"][mask_full], inv_full, "o", ms=2, color=color, alpha=0.1)
+                    ax_top.plot(
+                        _d["T_K"][mask_full], inv_full, "o", ms=2, color=color, alpha=0.1
+                    )
 
                     # Plot fit data
                     ax_top.errorbar(
@@ -1406,11 +1453,13 @@ def _(df_summary, mo):
     best = "Mean-field" if ff_good else "Curie-Weiss"
     best_row = row_ff if ff_good else row_cw
 
-    mo.md(fr"""
+    mo.md(rf"""
     ## Bottom line
 
     - Preferred method for final report: **{best}**
     - Recommended Curie temperature estimate: **Tc = {best_row["Weighted Tc [K]"]:.2f} ± {best_row["Weighted sigma [K]"]:.2f} K**
+    - Median chi2/dof: **{best_row["Median chi2/dof"]:.3f}**
+    - Median p-value: **{best_row["Median P-value"]:.3f}**
 
     This selection is based on the better residual behavior (lower median reduced chi-squared) and consistency across the three series.
     """)
