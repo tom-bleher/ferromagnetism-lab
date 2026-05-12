@@ -240,9 +240,9 @@ def _(SIGMA_Y_V, curve_fit, np):
 
         return np.asarray(selected, dtype=int)
 
-    def extract_loop_methods(x_pos, y_pos, x_neg, y_neg, edge_fraction=0.12):
+    def extract_loop_methods(x_pos, y_pos, x_neg, y_neg, edge_fraction=0.05):
         n = len(x_pos)
-        n_edge = max(6, int(np.ceil(edge_fraction * n)))
+        n_edge = max(5, int(np.ceil(edge_fraction * n)))
 
         # Method 1: value at H=0 (loop opening)
         y0_pos, sy0_pos = _y_at_zero(x_pos, y_pos, SIGMA_Y_V)
