@@ -326,8 +326,9 @@ def _(SIGMA_Y_V, curve_fit, np):
         idx = np.argmax(np.abs(d2M))
         return float(T[idx])
 
-    def fit_mean_field(T_K, M_norm, sigma_M, Tc_seed=215.0, T_rough=None):
+    def fit_mean_field(T_K, sigma_T, M_norm, sigma_M, Tc_seed=215.0, T_rough=None):
         _T = np.asarray(T_K, dtype=float)
+        _sT = np.asarray(sigma_T, dtype=float)
         M = np.asarray(M_norm, dtype=float)
         sM = np.asarray(sigma_M, dtype=float)
 
@@ -347,6 +348,7 @@ def _(SIGMA_Y_V, curve_fit, np):
             return {"ok": False, "reason": "insufficient points"}
 
         Tf = _T[mask]
+        sTf = _sT[mask]
         Mf = M[mask]
         sMf = np.maximum(sM[mask], 1e-4)
 
@@ -379,6 +381,7 @@ def _(SIGMA_Y_V, curve_fit, np):
             "sigma_Tc": sTc,
             "A": A,
             "T_fit": Tf,
+            "sigma_T_fit": sTf,
             "y_fit": Mf,
             "sigma_fit": sMf,
             "y_model": pred,
@@ -388,9 +391,10 @@ def _(SIGMA_Y_V, curve_fit, np):
         }
 
     def fit_curie_weiss(
-        T_K, chi, sigma_chi, Tc_seed=215.0, T_rough=None, cut_factor=1.25
+        T_K, sigma_T, chi, sigma_chi, Tc_seed=215.0, T_rough=None, cut_factor=1.25
     ):
         _T = np.asarray(T_K, dtype=float)
+        _sT = np.asarray(sigma_T, dtype=float)
         chi = np.asarray(chi, dtype=float)
         schi = np.asarray(sigma_chi, dtype=float)
 
@@ -413,6 +417,7 @@ def _(SIGMA_Y_V, curve_fit, np):
             return {"ok": False, "reason": "insufficient high-T points"}
 
         Tf = _T[fit_mask]
+        sTf = _sT[fit_mask]
         Yf = inv_chi[fit_mask]
         sYf = np.maximum(sigma_inv[fit_mask], 1e-6)
 
@@ -441,6 +446,7 @@ def _(SIGMA_Y_V, curve_fit, np):
             "sigma_Tc": sTc,
             "C": C,
             "T_fit": Tf,
+            "sigma_T_fit": sTf,
             "y_fit": Yf,
             "sigma_fit": sYf,
             "y_model": pred,
@@ -750,6 +756,7 @@ def _(COLORS, SERIES_ORDER, filtered_series_data, plt, save_figure):
             ax.errorbar(
                 _T,
                 _d["method1_norm"],
+                xerr=_d["sigma_T_K"],
                 yerr=_d["method1_sigma_norm"],
                 fmt="o-",
                 ms=3.5,
@@ -761,6 +768,7 @@ def _(COLORS, SERIES_ORDER, filtered_series_data, plt, save_figure):
             ax.errorbar(
                 _T,
                 _d["method2_norm"],
+                xerr=_d["sigma_T_K"],
                 yerr=_d["method2_sigma_norm"],
                 fmt="s-",
                 ms=3.2,
@@ -772,6 +780,7 @@ def _(COLORS, SERIES_ORDER, filtered_series_data, plt, save_figure):
             ax.errorbar(
                 _T,
                 _d["method3_norm"],
+                xerr=_d["sigma_T_K"],
                 yerr=_d["method3_sigma_norm"],
                 fmt="^-",
                 ms=3.5,
@@ -860,12 +869,13 @@ def _(
             sM = _d[f"{pm}_sigma_norm"]
 
             # Mean-field fit
-            ff = fit_mean_field(_T, M, sM, Tc_seed=215.0, T_rough=_tr)
+            ff = fit_mean_field(_T, _d["sigma_T_K"], M, sM, Tc_seed=215.0, T_rough=_tr)
             fit_results["mean_field"][_series_name][pm] = ff
 
             # Curie-Weiss fit (using M proxy as proxy for chi in paramagnetic regime)
             cw = fit_curie_weiss(
                 _T,
+                _d["sigma_T_K"],
                 M,
                 sM,
                 Tc_seed=ff["Tc"] if ff["ok"] else 215.0,
@@ -1154,8 +1164,9 @@ def _(
                 color = proxy_colors[pm]
 
                 if res["ok"]:
-                    Tf, yf, sf, r = (
+                    Tf, sTf, yf, sf, r = (
                         res["T_fit"],
+                        res["sigma_T_fit"],
                         res["y_fit"],
                         res["sigma_fit"],
                         res["residuals"],
@@ -1169,7 +1180,7 @@ def _(
 
                     # Plot fit data
                     ax_top.errorbar(
-                        Tf, yf, yerr=sf, fmt="o", ms=3, color=color, alpha=0.6
+                        Tf, yf, xerr=sTf, yerr=sf, fmt="o", ms=3, color=color, alpha=0.6
                     )
 
                     # Plot model
