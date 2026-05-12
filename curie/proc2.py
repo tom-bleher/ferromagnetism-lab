@@ -1077,7 +1077,7 @@ def _(
                 color = proxy_colors[pm]
 
                 if res["ok"]:
-                    Tf, yf, sf, r = (
+                    Tf, yf, sf, _ = (
                         res["T_fit"],
                         res["y_fit"],
                         res["sigma_fit"],
@@ -1085,19 +1085,23 @@ def _(
                     )
                     Tc, A = res["Tc"], res["A"]
 
-                    # Plot full data in background
+                    # Plot full data in background but show M^2 (normalized)
                     ax_top.plot(
-                        _d["T_K"], _d[f"{pm}_norm"], "o", ms=2, color=color, alpha=0.15
+                        _d["T_K"], _d[f"{pm}_norm"] ** 2, "o", ms=2, color=color, alpha=0.15
                     )
 
-                    # Plot fit data
+                    # Prepare squared fit-values and propagate uncertainties: sigma(M^2)=2*|M|*sigma_M
+                    yf_sq = yf ** 2
+                    sf_sq = np.maximum(1e-12, 2.0 * np.abs(yf) * sf)
+
+                    # Plot fit data in squared space
                     ax_top.errorbar(
-                        Tf, yf, yerr=sf, fmt="o", ms=3, color=color, alpha=0.6
+                        Tf, yf_sq, yerr=sf_sq, fmt="o", ms=3, color=color, alpha=0.6
                     )
 
-                    # Plot model
+                    # Plot model in squared space: (A*sqrt(Tc - T))^2 = A^2 * (Tc - T)
                     xline = np.linspace(np.min(Tf), np.max(Tf), 100)
-                    yline = A * np.sqrt(np.clip(Tc - xline, 0.0, None))
+                    yline = (A ** 2) * np.clip(Tc - xline, 0.0, None)
                     ax_top.plot(
                         xline,
                         yline,
@@ -1107,10 +1111,12 @@ def _(
                         label=f"{pm}: Tc={Tc:.1f}K",
                     )
 
-                    # Residuals
-                    ax_bot.plot(Tf, r, "o", ms=2.5, color=color, alpha=0.7)
+                    # Residuals in squared space
+                    ymodel_at_Tf = (A ** 2) * np.clip(Tc - Tf, 0.0, None)
+                    r_sq = (yf_sq - ymodel_at_Tf) / sf_sq
+                    ax_bot.plot(Tf, r_sq, "o", ms=2.5, color=color, alpha=0.7)
 
-            ax_top.set_ylabel("M (normalized)")
+            ax_top.set_ylabel("M^2 (normalized)")
             ax_top.legend(loc="lower left", fontsize=7)
             ax_bot.axhline(0.0, color="k", lw=0.8)
             ax_bot.set_xlabel("Temperature [K]")
