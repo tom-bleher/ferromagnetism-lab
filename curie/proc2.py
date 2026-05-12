@@ -75,11 +75,11 @@ def _():
     def save_figure(fig, stem):
         fig.savefig(FIG_DIR / f"{stem}.pdf", bbox_inches="tight", dpi=600)
 
-    return COLORS, Path, curve_fit, np, pd, plt, save_figure, ROOT
+    return COLORS, ROOT, curve_fit, np, pd, plt, save_figure
 
 
 @app.cell
-def _(Path, np, ROOT):
+def _(ROOT, np):
     DATA_DIR = ROOT / "data"
     SERIES_ORDER = ("series A", "series B", "series C")
     SERIES_FILES = {
@@ -326,7 +326,7 @@ def _(SIGMA_Y_V, curve_fit, np):
         idx = np.argmax(np.abs(d2M))
         return float(T[idx])
 
-    def fit_far_field(T_K, M_norm, sigma_M, Tc_seed=215.0, T_rough=None):
+    def fit_mean_field(T_K, M_norm, sigma_M, Tc_seed=215.0, T_rough=None):
         _T = np.asarray(T_K, dtype=float)
         M = np.asarray(M_norm, dtype=float)
         sM = np.asarray(sigma_M, dtype=float)
@@ -454,7 +454,7 @@ def _(SIGMA_Y_V, curve_fit, np):
         extract_chi_near_zero,
         extract_loop_methods,
         fit_curie_weiss,
-        fit_far_field,
+        fit_mean_field,
         sorted_channel_columns,
         transition_temp,
     )
@@ -800,7 +800,7 @@ def _(mo):
     ## Part B — Curie temperature extraction
 
     Two fitting methods are applied to each series:
-    1. **Far-field (mean-field near transition):** \(M(T)=A\sqrt{T_C-T}\)
+    1. **Mean-field (mean-field near transition):** \(M(T)=A\sqrt{T_C-T}\)
     2. **Curie-Weiss:** \(1/\chi(T)=(T-T_C)/C\)
 
     **Rough $T_c$ Estimate**
@@ -809,12 +809,12 @@ def _(mo):
     2. **Differentiation**: We compute the numerical second derivative $\frac{d^2M}{dT^2}$ using central differences.
     3. **Localization**: We identify $T_{c,\text{rough}}$ as the temperature where $|\frac{d^2M}{dT^2}|$ is maximized.
 
-    Physically, this locates the "knee" of the transition—the point of maximum curvature where the ferromagnetic drop-off enters the paramagnetic tail. This estimate is used to set the upper bound for Far-field fits and the lower bound for Curie-Weiss fits.
+    Physically, this locates the "knee" of the transition—the point of maximum curvature where the ferromagnetic drop-off enters the paramagnetic tail. This estimate is used to set the upper bound for Mean-field fits and the lower bound for Curie-Weiss fits.
 
     **Regime Selection (Data Cutting)**
     The physical models are only valid in specific temperature regimes. To ensure robust fits, points outside these regimes are automatically masked:
-    - **Far-field**: Only uses points where \(0.05 < M < 0.9\) to avoid saturation at low-T and finite-field smearing near \(T_c\).
-    - **Curie–Weiss**: Only uses points far away from the transition (\(T > \text{factor} \times T_{c,\text{rough}}\)) to ensure the system is purely in the paramagnetic state. This factor is controlled via an interactive slider and defaults to 1.25.
+    - **Mean-field**: Only uses points where \(0.05 < M < 0.9\) to avoid saturation at low-T and finite-field smearing near \(T_c\).
+    - **Curie-Weiss**: Only uses points far away from the transition (\(T > \text{factor} \times T_{c,\text{rough}}\)) to ensure the system is purely in the paramagnetic state. This factor is controlled via an interactive slider and defaults to 1.25.
 
     The plots below show the full slider-filtered range in light gray for context.
     Fits are now performed on all three extraction methods (M1, M2, M3) to allow for consistency cross-checks.
@@ -841,11 +841,11 @@ def _(
     cw_cut_factor,
     filtered_series_data,
     fit_curie_weiss,
-    fit_far_field,
+    fit_mean_field,
 ):
     # fit_results[model][series][proxy_method]
     fit_results = {
-        "far_field": {s: {} for s in SERIES_ORDER},
+        "mean_field": {s: {} for s in SERIES_ORDER},
         "curie_weiss": {s: {} for s in SERIES_ORDER},
     }
     proxy_methods = ["method1", "method2", "method3"]
@@ -859,9 +859,9 @@ def _(
             M = _d[f"{pm}_norm"]
             sM = _d[f"{pm}_sigma_norm"]
 
-            # Far-field fit
-            ff = fit_far_field(_T, M, sM, Tc_seed=215.0, T_rough=_tr)
-            fit_results["far_field"][_series_name][pm] = ff
+            # Mean-field fit
+            ff = fit_mean_field(_T, M, sM, Tc_seed=215.0, T_rough=_tr)
+            fit_results["mean_field"][_series_name][pm] = ff
 
             # Curie-Weiss fit (using M proxy as proxy for chi in paramagnetic regime)
             cw = fit_curie_weiss(
@@ -887,7 +887,7 @@ def _(SERIES_ORDER, fit_results, np, pd):
 
     fit_table_rows = []
     for model_key, model_label in [
-        ("far_field", "Far-field"),
+        ("mean_field", "Mean-field"),
         ("curie_weiss", "Curie-Weiss"),
     ]:
         for series in SERIES_ORDER:
@@ -918,7 +918,7 @@ def _(SERIES_ORDER, fit_results, np, pd):
 
     summary_stats = []
     for method_key, method_label in [
-        ("far_field", "Far-field"),
+        ("mean_field", "Mean-field"),
         ("curie_weiss", "Curie-Weiss"),
     ]:
 
@@ -971,7 +971,7 @@ def _(SERIES_ORDER, fit_results, np, pd):
 
     impact_rows = []
     for model_key, model_label in [
-        ("far_field", "Far-field"),
+        ("mean_field", "Mean-field"),
         ("curie_weiss", "Curie-Weiss"),
     ]:
         for scope_label, series_list in [
@@ -1059,10 +1059,10 @@ def _(
             ax_top.axvline(
                 _tr, color="black", linestyle="--", alpha=0.4, label="Rough Tc"
             )
-            ax_top.set_title(f"{_series_name} | Far-field Fit")
+            ax_top.set_title(f"{_series_name} | Mean-field Fit")
 
             for pm in proxy_methods:
-                res = fit_results["far_field"][_series_name][pm]
+                res = fit_results["mean_field"][_series_name][pm]
                 color = proxy_colors[pm]
 
                 if res["ok"]:
@@ -1106,7 +1106,7 @@ def _(
             ax_bot.set_ylabel("res/sigma")
 
         fig.tight_layout()
-        save_figure(fig, "far_field_fits")
+        save_figure(fig, "mean_field_fits")
         return fig
 
     _()
@@ -1207,7 +1207,7 @@ def _(
 
 @app.cell
 def _(df_summary, mo):
-    row_ff = df_summary.loc[df_summary["Method"] == "Far-field"].iloc[0]
+    row_ff = df_summary.loc[df_summary["Method"] == "Mean-field"].iloc[0]
     row_cw = df_summary.loc[df_summary["Method"] == "Curie-Weiss"].iloc[0]
 
     ff_good = (
@@ -1218,7 +1218,7 @@ def _(df_summary, mo):
         )
         else True
     )
-    best = "Far-field" if ff_good else "Curie-Weiss"
+    best = "Mean-field" if ff_good else "Curie-Weiss"
     best_row = row_ff if ff_good else row_cw
 
     mo.md(f"""
