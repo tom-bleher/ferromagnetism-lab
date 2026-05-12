@@ -60,6 +60,10 @@ def _():
         }
     )
 
+    ROOT = Path(__file__).resolve().parent
+    FIG_DIR = ROOT.parent / "report" / "media" / "curie"
+    FIG_DIR.mkdir(parents=True, exist_ok=True)
+
     COLORS = {
         "m1": "#1b9e77",
         "m2": "#d95f02",
@@ -67,12 +71,15 @@ def _():
         "fit": "#e7298a",
         "data": "#1f77b4",
     }
-    return COLORS, Path, curve_fit, np, pd, plt
+
+    def save_figure(fig, stem):
+        fig.savefig(FIG_DIR / f"{stem}.pdf", bbox_inches="tight", dpi=600)
+
+    return COLORS, Path, curve_fit, np, pd, plt, save_figure, ROOT
 
 
 @app.cell
-def _(Path, np):
-    ROOT = Path(__file__).resolve().parent
+def _(Path, np, ROOT):
     DATA_DIR = ROOT / "data"
     SERIES_ORDER = ("series A", "series B", "series C")
     SERIES_FILES = {
@@ -146,7 +153,7 @@ def _(mo):
 def _(SIGMA_Y_V, curve_fit, np):
     def sorted_channel_columns(df, prefix):
         cols = [c for c in df.columns if c.startswith(prefix)]
-        return sorted(cols, key=lambda c: int(c[len(prefix) :]))
+        return sorted(cols, key=lambda c: int(c[len(prefix):]))
 
     def _y_at_zero(x, y, sigma_y):
         x = np.asarray(x, dtype=float)
@@ -733,7 +740,7 @@ def _(mo):
 
 
 @app.cell
-def _(COLORS, SERIES_ORDER, filtered_series_data, plt):
+def _(COLORS, SERIES_ORDER, filtered_series_data, plt, save_figure):
     def _():
         fig, axs = plt.subplots(nrows=3, ncols=1, figsize=(8, 12))
         for _i, _series_name in enumerate(SERIES_ORDER):
@@ -782,6 +789,7 @@ def _(COLORS, SERIES_ORDER, filtered_series_data, plt):
         return fig
 
     fig = _()
+    save_figure(fig, "normalized_magnetization_curves")
     fig  # type: ignore
     return
 
@@ -1026,6 +1034,7 @@ def _(
     fit_results,
     np,
     plt,
+    save_figure,
     sliders,
 ):
     def _():
@@ -1097,6 +1106,7 @@ def _(
             ax_bot.set_ylabel("res/sigma")
 
         fig.tight_layout()
+        save_figure(fig, "far_field_fits")
         return fig
 
     _()
@@ -1111,6 +1121,7 @@ def _(
     fit_results,
     np,
     plt,
+    save_figure,
     sliders,
 ):
     def _():
@@ -1187,6 +1198,7 @@ def _(
             ax_bot.set_ylabel("res/sigma")
 
         fig.tight_layout()
+        save_figure(fig, "curie_weiss_fits")
         return fig
 
     _()
