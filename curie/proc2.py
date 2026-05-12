@@ -345,7 +345,9 @@ def _(SIGMA_Y_V, curve_fit, np):
         idx = np.argmax(np.abs(d2M))
         return float(T[idx])
 
-    def fit_mean_field(T_K, sigma_T, M_norm, sigma_M, Tc_seed=215.0, T_rough=None):
+    def fit_mean_field(
+        T_K, sigma_T, M_norm, sigma_M, Tc_seed=215.0, T_rough=None, cut_factor=0.75
+    ):
         _T = np.asarray(T_K, dtype=float)
         _sT = np.asarray(sigma_T, dtype=float)
         M = np.asarray(M_norm, dtype=float)
@@ -353,18 +355,26 @@ def _(SIGMA_Y_V, curve_fit, np):
 
         # Physical Bounds:
         # 1. M < 0.9: Exclude low-T saturation where MF law fails.
-        # 2. T < T_rough - safety: Exclude the finite-field 'tail' above transition.
+        # 2. T >= cut_factor * Tc_rough: Exclude the deep low-T region below the transition window.
         mask = np.isfinite(_T) & np.isfinite(M) & np.isfinite(sM) & (M < 0.9)
 
+        Tc_ref = T_rough if T_rough is not None else Tc_seed
+        T_cut = cut_factor * Tc_ref
+        mask &= _T >= T_cut
+
         if T_rough is not None:
+            # Keep the upper guard near the rough transition to avoid finite-field tails.
             mask &= _T < T_rough - 1.5
         else:
             mask &= M > 0.05
 
-        if np.sum(mask) < 8:
-            mask = np.isfinite(_T) & np.isfinite(M) & np.isfinite(sM) & (M > 0.02)
-        if np.sum(mask) < 6:
-            return {"ok": False, "reason": "insufficient points"}
+        n_strict = int(np.sum(mask))
+        if n_strict < 8:
+            return {
+                "ok": False,
+                "reason": f"insufficient points after cutoff ({n_strict})",
+                "n_strict": n_strict,
+            }
 
         Tf = _T[mask]
         sTf = _sT[mask]
@@ -407,6 +417,7 @@ def _(SIGMA_Y_V, curve_fit, np):
             "residuals": res,
             "chi2_red": chi2_red,
             "n": int(len(Tf)),
+            "n_strict": n_strict,
         }
 
     def fit_curie_weiss(
@@ -900,13 +911,26 @@ def _(mo):
 
     **Regime Selection (Data Cutting)**
     The physical models are only valid in specific temperature regimes. To ensure robust fits, points outside these regimes are automatically masked:
-    - **Mean-field**: Only uses points where \(0.05 < M < 0.9\) to avoid saturation at low-T and finite-field smearing near \(T_c\).
+    - **Mean-field**: Only uses points above a lower cutoff (default \(0.75\,T_{c,\text{rough}}\)) and below the finite-field upper guard to avoid deep low-T saturation and smearing near \(T_c\).
     - **Curie-Weiss**: Only uses points far away from the transition (\(T > \text{factor} \times T_{c,\text{rough}}\)) to ensure the system is purely in the paramagnetic state. This factor is controlled via an interactive slider and defaults to 1.25.
 
     The plots below show the full slider-filtered range in light gray for context.
     Fits are now performed on all three extraction methods (M1, M2, M3) to allow for consistency cross-checks.
     """)
     return
+
+
+@app.cell
+def _(mo):
+    mf_cut_factor = mo.ui.slider(
+        start=0.5,
+        stop=1.0,
+        step=0.01,
+        value=0.75,
+        label="Mean-field Cut Factor (T >= factor * Tc_rough)",
+    )
+    mf_cut_factor  # type: ignore
+    return (mf_cut_factor,)
 
 
 @app.cell
@@ -929,6 +953,7 @@ def _(
     filtered_series_data,
     fit_curie_weiss,
     fit_mean_field,
+    mf_cut_factor,
 ):
     # fit_results[model][series][proxy_method]
     fit_results = {
@@ -947,7 +972,15 @@ def _(
             sM = _d[f"{pm}_sigma_norm"]
 
             # Mean-field fit
-            ff = fit_mean_field(_T, _d["sigma_T_K"], M, sM, Tc_seed=215.0, T_rough=_tr)
+            ff = fit_mean_field(
+                _T,
+                _d["sigma_T_K"],
+                M,
+                sM,
+                Tc_seed=215.0,
+                T_rough=_tr,
+                cut_factor=mf_cut_factor.value,
+            )
             fit_results["mean_field"][_series_name][pm] = ff
 
             # Curie-Weiss fit (using M proxy as proxy for chi in paramagnetic regime)
