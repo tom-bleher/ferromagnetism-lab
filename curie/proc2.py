@@ -23,8 +23,11 @@ def _(mo):
 
     **Data Cleaning & Processing**
     1. Setup and data preparation (including units and uncertainties)
-    2. **Handling Instabilities**: Measurement C is automatically clipped to the region after its magnetization peak to remove initial stabilization instability.
-    3. **Outlier Removal**: Singular anomalies are detected via a robust Hampel filter.
+    2. **Sanitization & Selection**:
+        - **Series C Instability**: We detect the start-up transient in Series C by finding the global maximum of magnetization (smoothed via moving average). Data preceding this peak is discarded to ensure fits start from a stabilized state.
+        - **Outlier Filtering (Hampel Filter)**: Singular anomalies are identified via a rolling 7-point median. Points deviating from the median by more than $4.8 \times \text{MAD}$ (Median Absolute Deviation) are removed.
+        - **Regime Selection**: Fits are gated by physical regimes (Mean-field near transition, Curie-Weiss in the tail) to maintain model validity.
+    3. **Magnetization Proxy Extraction**: Three methods are compared, including an **Adaptive Tail Fit** ($M_3$) which identifies the linear saturation region by growing the fit window as long as residuals stay within a $2.2\sigma$ tolerance.
     4. Part A: extraction of magnetization proxies (M1, M2, M3) from loop geometries.
     5. **Rough Tc Estimation**: Numerical second-derivatives are used to find the transition inflection point.
     6. Part B: Refined Curie temperature extraction using restricted temperature regimes.
@@ -125,8 +128,8 @@ def _(mo):
       - X channel \(\propto H\)
       - Y channel \(\propto B\)
     - **Automated Cleaning Applied**:
-      - **Series C instability**: The measurement is clipped to the region *after* the initial magnetization peak to skip stabilization noise.
-      - **Outliers**: Singular anomalies are identified using a 7-point rolling median threshold (Hampel filter) and removed from the extraction.
+      - **Series C instability**: We detect the start-up transient by locating the global maximum of magnetization (smoothed via 5-point average). Data preceding this peak is discarded to exclude non-equilibrium heating.
+      - **Outlier Removal (Hampel Filter)**: Point anomalies are identified via a rolling 7-point median. If $|M_i - \text{median}| > 4.8 \times \text{MAD}$, the point is discarded as a non-physical artifact.
     - Built per-loop uncertainty arrays:
       - \(\sigma_T\): thermometer spec + temperature-resolution + finite-time drift
       - \(\sigma_X, \sigma_Y\): digitization uncertainty (uniform quantization model)
@@ -342,7 +345,7 @@ def _(SIGMA_Y_V, curve_fit, np):
         def model(Tloc, Tc, A):
             return A * np.sqrt(np.clip(Tc - Tloc, 0.0, None))
 
-        p0 = [Tc_seed, max(0.05, np.max(Mf) / np.sqrt(max(Tc_seed - np.min(Tf), 1.0)))]
+        p0 = [T_rough if T_rough is not None else Tc_seed, max(0.05, np.max(Mf) / np.sqrt(max(Tc_seed - np.min(Tf), 1.0)))]
         popt, pcov = curve_fit(
             model,
             Tf,
@@ -407,7 +410,7 @@ def _(SIGMA_Y_V, curve_fit, np):
             model,
             Tf,
             Yf,
-            p0=[Tc_seed, 1.0],
+            p0=[T_rough if T_rough is not None else Tc_seed, 1.0],
             sigma=sYf,
             absolute_sigma=True,
             bounds=([150.0, 1e-6], [350.0, 1e6]),
@@ -698,8 +701,11 @@ def _(mo):
 
     For each measurement series (A, B, C), one graph is shown with all three normalized \(M(T)\) curves:
     1. **Method 1**: loop intersection at \(H=0\)
-    2. **Method 2**: saturation-edge values
-    3. **Method 3**: adaptive linear fit to saturation tails and extrapolation to \(H=0\)
+    2. **Method 2**: saturation-edge values (tips of the loop)
+    3. **Method 3**: extrapolation of saturation tails to \(H=0\) using an adaptive linear fit.
+
+    **Extraction Logic for Method 3**:
+    The linear "tail" of the saturation region is identified by an algorithm that starts at the extreme field tips and grows the fitting window inward. It stops when the RMS of the residuals increases by more than $25\%$ or exceeds $2.2\sigma$. This ensures the extrapolated zero-field magnetization proxy is derived from a strictly linear saturation regime.
     """)
     return
 
@@ -840,23 +846,34 @@ def _(
 @app.cell
 def _(SERIES_ORDER, fit_results, np, pd):
     proxy_keys = ["method1", "method2", "method3"]
-    proxy_labels = {"method1": "M1 (Inter.)", "method2": "M2 (Sat.)", "method3": "M3 (Tail)"}
+    proxy_labels = {
+        "method1": "M1 (Inter.)",
+        "method2": "M2 (Sat.)",
+        "method3": "M3 (Tail)",
+    }
 
     fit_table_rows = []
-    for model_key, model_label in [("far_field", "Far-field"), ("curie_weiss", "Curie-Weiss")]:
+    for model_key, model_label in [
+        ("far_field", "Far-field"),
+        ("curie_weiss", "Curie-Weiss"),
+    ]:
         for series in SERIES_ORDER:
             row = {"Series": series, "Model": model_label}
             vals, sigs = [], []
+            n_list = []
 
             for pk in proxy_keys:
                 res = fit_results[model_key][series][pk]
                 if res["ok"]:
                     row[proxy_labels[pk]] = f"{res['Tc']:.2f} ± {res['sigma_Tc']:.2f}"
+                    n_list.append(str(res["n"]))
                     vals.append(res["Tc"])
                     sigs.append(res["sigma_Tc"])
                 else:
                     row[proxy_labels[pk]] = "Fail"
+                    n_list.append("0")
 
+            row["N (M1,M2,M3)"] = ", ".join(n_list)
             if vals:
                 w = 1.0 / (np.array(sigs, dtype=float)**2)
                 w_mean = np.sum(w * vals) / np.sum(w)
@@ -872,24 +889,29 @@ def _(SERIES_ORDER, fit_results, np, pd):
         ("curie_weiss", "Curie-Weiss"),
     ]:
         def get_stats(series_list):
-            vals, sigs, chi2s = [], [], []
+            vals, sigs, chi2s, ns = [], [], [], []
             for series in series_list:
                 for pm in proxy_keys:
                     res = fit_results[method_key][series][pm]
-                    if res["ok"] and np.isfinite(res["sigma_Tc"]) and res["sigma_Tc"] > 0:
+                    if (
+                        res["ok"]
+                        and np.isfinite(res["sigma_Tc"])
+                        and res["sigma_Tc"] > 0
+                    ):
                         vals.append(res["Tc"])
                         sigs.append(res["sigma_Tc"])
                         chi2s.append(res["chi2_red"])
+                        ns.append(res["n"])
 
             if not vals:
-                return [np.nan] * 4 + [0]
+                return [np.nan] * 4 + [0, 0]
 
             vals, sigs = np.array(vals), np.array(sigs)
             w = 1.0 / (sigs**2)
             w_mean = np.sum(w * vals) / np.sum(w)
             w_sigma = np.sqrt(1.0 / np.sum(w))
             std_dev = np.std(vals, ddof=1) if len(vals) > 1 else 0.0
-            return [w_mean, w_sigma, std_dev, np.median(chi2s), len(vals)]
+            return [w_mean, w_sigma, std_dev, np.median(chi2s), len(vals), sum(ns)]
 
         all_stats = get_stats(SERIES_ORDER)
         pref_stats = get_stats(["series A", "series B"])
@@ -899,7 +921,8 @@ def _(SERIES_ORDER, fit_results, np, pd):
             "Scope": "All (A,B,C)",
             "Weighted Tc [K]": all_stats[0],
             "Weighted sigma [K]": all_stats[1],
-            "Total Fits": int(all_stats[4]),
+            "Successful Fits": int(all_stats[4]),
+            "Total Points": int(all_stats[5]),
             "Median chi2/dof": all_stats[3]
         })
         summary_stats.append({
@@ -907,8 +930,9 @@ def _(SERIES_ORDER, fit_results, np, pd):
             "Scope": "Preferred (A,B)",
             "Weighted Tc [K]": pref_stats[0],
             "Weighted sigma [K]": pref_stats[1],
-            "Total Fits": int(pref_stats[4]),
-            "Median chi2/dof": pref_stats[3]
+            "Successful Fits": int(pref_stats[4]),
+            "Total Points": int(pref_stats[5]),
+            "Median chi2/dof": pref_stats[3],
         })
 
     impact_rows = []
@@ -916,19 +940,22 @@ def _(SERIES_ORDER, fit_results, np, pd):
         for scope_label, series_list in [("All (A,B,C)", SERIES_ORDER), ("Preferred (A,B)", ["series A", "series B"])]:
             i_row = {"Model": model_label, "Scope": scope_label}
             for pk in proxy_keys:
-                v, s = [], []
+                v, s, ns = [], [], []
                 for series in series_list:
                     res = fit_results[model_key][series][pk]
                     if res["ok"] and np.isfinite(res["sigma_Tc"]) and res["sigma_Tc"] > 0:
                         v.append(res["Tc"])
                         s.append(res["sigma_Tc"])
+                        ns.append(res["n"])
                 if v:
                     w = 1.0 / (np.array(s, dtype=float)**2)
                     wm = np.sum(w * v) / np.sum(w)
                     ws = np.sqrt(1.0 / np.sum(w))
                     i_row[proxy_labels[pk]] = f"{wm:.2f} ± {ws:.2f}"
+                    i_row[f"N({pk[-1]})"] = sum(ns)
                 else:
                     i_row[proxy_labels[pk]] = "N/A"
+                    i_row[f"N({pk[-1]})"] = 0
             impact_rows.append(i_row)
 
     df_summary = pd.DataFrame(summary_stats)
@@ -942,11 +969,12 @@ def _(df_fit_table, df_method_impact, df_summary, mo):
     mo.md(f"""
     ### Curie Temperature Results Table
     This table shows $T_c$ estimates for each model and series, computed across all three magnetization extraction methods (M1, M2, M3).
+    The **N (M1,M2,M3)** column indicates the number of points used in each respective proxy fit.
 
     {df_fit_table.to_markdown(index=False)}
 
     ### Overall Method comparison and Series C impact
-    "Total Fits" counts successful fits across all proxies and series in the scope.
+    "Successful Fits" counts successful models across all proxies and series; "Total Points" is the aggregate number of data points fitted.
 
     {df_summary.to_markdown(index=False, floatfmt=".3f")}
 
